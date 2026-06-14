@@ -77,7 +77,12 @@ class TelegramNotifier(Notifier):
         out = []
         for u in res.get("result", []):
             self._offset = u["update_id"] + 1
-            msg = (u.get("message") or {}).get("text")
+            m = u.get("message") or {}
+            # SECURITY: only accept messages from the configured owner chat — otherwise anyone who
+            # finds the bot could inject instructions the orchestrator would act on as the owner.
+            if str((m.get("chat") or {}).get("id")) != str(self.chat_id):
+                continue
+            msg = m.get("text")
             if msg:
                 out.append(msg)
         return out

@@ -1,11 +1,12 @@
 """Real perception: build the world from durable signals — bounded, summarize-don't-ingest.
 
-Stdlib-only and standalone-safe (any source that errors degrades to empty, never crashes
-the tick). Sources:
+Stdlib-only and standalone-safe. A source OUTAGE is surfaced (e.g. _worksource_status) rather than
+masked as "no work". Sources:
   - the loopback ledger (episodic memory): recurring signatures = "this keeps costing me"
   - the worksource adapter (folder | gitea): the open backlog
-  - own run records: unfinished/failed ticks
 The kernel maps these onto the priority ladder.
+  - active_incident / unfinished_wip: not yet wired (alertmanager + WIP/run-record adapters) — these
+    rungs stay None until implemented; the loop must not pretend they exist.
 """
 from __future__ import annotations
 import json
@@ -46,42 +47,42 @@ def ledger_signals(cfg: dict) -> dict:
 
 
 def worksource(cfg: dict) -> list[str]:
+    """The open backlog. RAISES on a real source outage (so the caller can tell a down worksource
+    from a genuinely-empty one — they are NOT the same and must not both look like 'no work')."""
     ws = cfg.get("worksource", {}) or {}
     kind = ws.get("kind", "folder")
-    try:
-        if kind == "folder":
-            d = ROOT / ws.get("path", "./tasks").lstrip("./")
-            return [f.name for f in d.glob("*") if f.is_file() and f.name != ".keep"] if d.exists() else []
-        if kind == "gitea":
-            return _gitea_open(ws)
-    except Exception:
-        return []
+    if kind == "folder":
+        d = ROOT / ws.get("path", "./tasks").lstrip("./")
+        return [f.name for f in d.glob("*") if f.is_file() and f.name != ".keep"] if d.exists() else []
+    if kind == "gitea":
+        return _gitea_open(ws)
     return []
 
 
 def _gitea_open(ws: dict) -> list[str]:
     """Optional, fully config-driven. api/repo/token_cmd come from config.yaml — no infra is
-    hardcoded in the core. Missing config => no gitea backlog. Best-effort; never raises out."""
+    hardcoded in the core. Missing config => no gitea backlog (legit empty); a fetch ERROR RAISES
+    so perceive() can surface 'source down' instead of masking it as 'no work'."""
     import subprocess, urllib.request
     base = ws.get("api")
     repo = ws.get("repo")
     tok_cmd = ws.get("token_cmd")
     if not (base and repo and tok_cmd):
         return []
-    try:
-        tok = subprocess.run([tok_cmd], capture_output=True, text=True, timeout=10).stdout.strip()
-        req = urllib.request.Request(
-            f"{base}/repos/{repo}/issues?state=open&type=issues&limit=15&labels=status:auto-fixable",
-            headers={"Authorization": f"token {tok}"})
-        data = json.load(urllib.request.urlopen(req, timeout=10))
-        return [i.get("title", "")[:70] for i in data][:15]
-    except Exception:
-        return []
+    tok = subprocess.run([tok_cmd], capture_output=True, text=True, timeout=10).stdout.strip()
+    req = urllib.request.Request(
+        f"{base}/repos/{repo}/issues?state=open&type=issues&limit=15&labels=status:auto-fixable",
+        headers={"Authorization": f"token {tok}"})
+    data = json.load(urllib.request.urlopen(req, timeout=10))
+    return [i.get("title", "")[:70] for i in data][:15]
 
 
 def perceive(cfg: dict) -> dict:
     led = ledger_signals(cfg)
-    backlog = worksource(cfg)
+    try:                                   # a down worksource must look DIFFERENT from an empty one
+        backlog, ws_status = worksource(cfg), "ok"
+    except Exception as e:
+        backlog, ws_status = [], f"error: {str(e)[:100]}"
     recurring = led["recurring"]
     # Categorize recurring ledger signatures by their LABEL. A code-defect that keeps recurring is
     # a real regression to fix; a tooling-gap / process / friction lesson is SELF-IMPROVEMENT, not
@@ -99,4 +100,5 @@ def perceive(cfg: dict) -> dict:
                                                        # driven by the question queue + discovery staleness
         "_ledger": led,
         "_backlog_count": len(backlog),
+        "_worksource_status": ws_status,               # diagnostic only (_-prefixed -> decide() ignores it)
     }

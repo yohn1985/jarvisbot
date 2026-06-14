@@ -566,7 +566,7 @@ async function pollChat(){   // cheap fast-path: ONLY the messages endpoint (no 
   if((msgs||[]).some(m=>m.streaming)) _fastUntil=Date.now()+12000;
   renderChat(msgs);
 }
-async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
+async function kill(pid){ await fetch('/api/kill',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid})}); load(); }
 async function answerQ(id){
   const v=document.getElementById('a-'+id).value.trim(); if(!v) return;
   await fetch('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,text:v})}); load();

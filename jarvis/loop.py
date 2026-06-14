@@ -67,7 +67,8 @@ def run(once: bool = False):
                     messaging.say(txt, conv="telegram", title="Telegram")
             except Exception:
                 pass
-        if not wm.lock("tick", ttl=600):    # don't let two loops/ticks collide (stigmergy)
+        tick_tok = wm.lock("tick", ttl=600)    # owner-token lock (released only by this holder)
+        if not tick_tok:                        # another tick holds it -> don't collide (stigmergy)
             time.sleep(5)
             continue
         try:
@@ -81,7 +82,7 @@ def run(once: bool = False):
             else:
                 decision = kernel.tick(cfg)
         finally:
-            wm.unlock("tick")
+            wm.unlock("tick", tick_tok)
         delay = SETUP_DELAY if decision.get("setup") else next_delay(cfg, decision)
         label = "setup" if decision.get("setup") else "tick"
         print(f"[jarvis] {label} {decision['ts']} rung={decision.get('rung')} -> next wake in {delay}s")

@@ -124,23 +124,40 @@ class RoutingLLM:
         params = (self.params or {}).get(role) or {}
         if think:
             params = {**params, "thinking": think}
-        target = self.routing.get(role) or (self.fallbacks[0] if self.fallbacks else "")
-        backend, model = self._resolve(target)
-        if not self._present(backend):
-            out = self.run(role, prompt, timeout); on_delta("text", out); return out
-        spec = self.backends.get(backend)
-        try:
-            if backend == "claude" and not (isinstance(spec, dict) and spec.get("http")):
-                return self._stream_claude_cli(model, prompt, on_delta, timeout, params, should_cancel, images)
-            if isinstance(spec, dict) and spec.get("http") and spec.get("format") != "anthropic":
-                return self._stream_http_openai(spec, model, prompt, on_delta, timeout, params, should_cancel, images)
-        except Exception:
-            pass
-        if should_cancel and should_cancel():
-            return ""
-        out = self._invoke(backend, model, prompt, timeout, params)   # fallback: one-shot
-        on_delta("text", out)
-        return out
+        # Build the FULL target list like run() (role target + fallbacks) and advance through it on
+        # failure — the old code only ever tried the role target / first fallback on the SAME backend,
+        # so a *failing* (not merely absent) primary broke chat instead of failing over.
+        targets, tried = [], []
+        if self.routing.get(role):
+            targets.append(self.routing[role])
+        targets += [f for f in self.fallbacks if f not in targets]
+        state = {"emitted": False}
+
+        def emit(kind, text):                # once any token is shown, we must NOT restart on another
+            state["emitted"] = True          # backend (that would duplicate the partial in the UI)
+            on_delta(kind, text)
+
+        for target in targets:
+            if should_cancel and should_cancel():
+                return ""
+            backend, model = self._resolve(target)
+            if not self._present(backend):
+                tried.append(f"{backend}:absent"); continue
+            spec = self.backends.get(backend)
+            try:
+                if backend == "claude" and not (isinstance(spec, dict) and spec.get("http")):
+                    return self._stream_claude_cli(model, prompt, emit, timeout, params, should_cancel, images)
+                if isinstance(spec, dict) and spec.get("http") and spec.get("format") != "anthropic":
+                    return self._stream_http_openai(spec, model, prompt, emit, timeout, params, should_cancel, images)
+                out = self._invoke(backend, model, prompt, timeout, params)   # non-streamable -> one-shot
+                emit("text", out)
+                return out
+            except Exception as e:
+                if state["emitted"]:         # already streamed a partial -> surface, don't re-stream
+                    raise
+                tried.append(f"{backend}:{str(e)[:40]}")
+                continue
+        raise RuntimeError(f"no usable streaming backend for role '{role}' (tried: {tried})")
 
     def _stream_claude_cli(self, model, prompt, on_delta, timeout, params, should_cancel=None, images=None):
         import subprocess
@@ -196,7 +213,16 @@ class RoutingLLM:
                 r = ev.get("result") or ""
                 if r:
                     full = r; on_delta("text", r)
-        p.wait(timeout=timeout)
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            if p.poll() is None:             # never leave an orphaned/stalled subprocess behind
+                try:
+                    p.kill(); p.wait(timeout=5)
+                except Exception:
+                    pass
         if not full and not (should_cancel and should_cancel()):
             raise RuntimeError("claude stream produced no text")
         return full

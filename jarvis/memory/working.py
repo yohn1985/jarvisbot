@@ -50,19 +50,31 @@ class WorkingMemory:
         q = self._mem.get(queue, [])
         return q.pop(0) if q else None
 
-    def lock(self, name: str, ttl: int = 300) -> bool:
-        """Best-effort mutual exclusion (two ticks/workers must not claim the same thing)."""
+    def lock(self, name: str, ttl: int = 300):
+        """Mutual exclusion with an OWNER TOKEN. Returns the token if acquired, else None.
+        The token is required to unlock, so a tick that outlives its TTL (key expires, another
+        acquirer takes it) can NOT delete the new holder's lock on its way out.
+        NOTE: the in-memory fallback is process-local only — it does NOT exclude across processes;
+        run a single loop, or use Redis, for a real system-wide mutex."""
+        import uuid
+        token = uuid.uuid4().hex
         if self.r:
-            return bool(self.r.set(f"lock:{name}", "1", nx=True, ex=ttl))
+            return token if self.r.set(f"lock:{name}", token, nx=True, ex=ttl) else None
         if self._mem.get(f"lock:{name}"):
-            return False
-        self._mem[f"lock:{name}"] = "1"
-        return True
+            return None
+        self._mem[f"lock:{name}"] = token
+        return token
 
-    def unlock(self, name: str) -> None:
+    def unlock(self, name: str, token: str | None = None) -> None:
+        """Release only if we still own it (compare-and-delete)."""
         if self.r:
-            self.r.delete(f"lock:{name}")
-        else:
+            try:
+                self.r.eval("if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+                            1, f"lock:{name}", token or "")
+            except Exception:
+                if self.r.get(f"lock:{name}") == token:
+                    self.r.delete(f"lock:{name}")
+        elif token is None or self._mem.get(f"lock:{name}") == token:
             self._mem.pop(f"lock:{name}", None)
 
 

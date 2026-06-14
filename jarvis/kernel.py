@@ -142,7 +142,9 @@ def _explore(cfg, decision):
     skill = str(root / "skills" / "discover" / "skill.py")
 
     def run(args):
-        subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=300, cwd=str(root))
+        # 240s × _ANSWER_PER_CYCLE(2) = 480s, under the 600s tick-lock TTL (loop.py); think() is gated
+        # off during learning, so a curiosity tick stays bounded and can't outlive its lock.
+        subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=240, cwd=str(root))
 
     # Routine curiosity is SILENT — it shows in the RUNS feed (decision['worker']); chat is reserved
     # for things the owner should see (suggestions, questions, problems) so it isn't spammed.
@@ -257,10 +259,10 @@ def think(cfg, decision, world):
     decision["model"] = (cfg.get("llm", {}).get("routing", {}) or {}).get("orchestrator", "")
     if out.upper().startswith("QUESTION:"):
         q = out.split(":", 1)[1].strip()
-        decision["asked"] = q
-        decision["thought"] = f"stuck -> asked owner: {q}"
+        posted = False
         try:
             messaging.post_question(q, ref=decision["action"][:60])   # dashboard (canonical)
+            posted = True
         except Exception:
             pass
         try:                                                          # + Telegram if configured
@@ -270,6 +272,13 @@ def think(cfg, decision, world):
                 tg.ask(q)
         except Exception:
             pass
+        # Only treat the tick as "asked" (which SKIPS act()) if the question actually reached the
+        # owner. A failed post must NOT silently park the loop waiting on a question nobody saw.
+        if posted:
+            decision["asked"] = q
+            decision["thought"] = f"stuck -> asked owner: {q}"
+        else:
+            decision["thought"] = f"(could not deliver question to owner; proceeding): {q[:120]}"
     else:
         decision["thought"] = out[:600]
 

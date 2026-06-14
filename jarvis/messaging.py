@@ -5,12 +5,37 @@ threads its questions by topic (slug of the ref), so repeated questions about th
 land in one conversation. The owner can start a New chat. Stdlib only.
 """
 from __future__ import annotations
-import json, re, time, uuid
+import json, os, re, time, uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 STATE = Path(__file__).resolve().parent.parent / "state"
 MSGS = STATE / "messages.jsonl"
 CONV_META = STATE / "conv_meta.json"   # per-conversation flags (archived) — never deletes messages
+_LOCKFILE = STATE / ".messages.lock"
+
+
+@contextmanager
+def _flock():
+    """Cross-PROCESS exclusive lock for message read-modify-write. The dashboard and the loop both
+    write messages.jsonl; without this, a whole-file rewrite (stream/answer) racing an append loses
+    the append or yields a torn read. flock serializes them across processes (Linux)."""
+    STATE.mkdir(exist_ok=True)
+    f = open(_LOCKFILE, "w")
+    try:
+        try:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except Exception:
+            pass                            # non-flock platforms: degrade to no cross-proc lock
+        yield
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        f.close()
 
 
 def _meta() -> dict:
@@ -46,8 +71,9 @@ def _slug(s: str) -> str:
 
 def _append(row: dict) -> dict:
     STATE.mkdir(exist_ok=True)
-    with open(MSGS, "a") as f:
-        f.write(json.dumps(row) + "\n")
+    with _flock():                          # serialize with whole-file rewrites so appends aren't lost
+        with open(MSGS, "a") as f:
+            f.write(json.dumps(row) + "\n")
     return row
 
 
@@ -137,48 +163,68 @@ def stream_start(conv: str = "general") -> str:
 
 
 def _rewrite(rows: list[dict]) -> None:
-    with open(MSGS, "w") as f:
+    """ATOMIC whole-file write (tmp + os.replace) — a crash mid-write can't truncate the history.
+    Caller MUST already hold _flock() (do not nest _flock — flock would self-deadlock on a 2nd fd)."""
+    tmp = MSGS.with_name(MSGS.name + ".tmp")
+    with open(tmp, "w") as f:
         for m in rows:
             f.write(json.dumps(m) + "\n")
+    os.replace(tmp, MSGS)
+
+
+def _mutate(fn) -> bool:
+    """Read-modify-write the whole log atomically under the cross-process lock, so a concurrent
+    append (or another mutator) can never be lost between the read and the rewrite."""
+    with _flock():
+        rows = _all()
+        changed = fn(rows)
+        if changed:
+            _rewrite(rows)
+    return bool(changed)
 
 
 def stream_update(mid: str, text: str, thinking: str | None = None) -> None:
     """Set the running text (and thinking) of a streaming message — the dashboard shows it grow."""
-    rows = _all()
-    for m in rows:
-        if m.get("id") == mid:
-            m["text"] = text
-            if thinking is not None:
-                m["thinking"] = thinking
-            break
-    _rewrite(rows)
+    def fn(rows):
+        for m in rows:
+            if m.get("id") == mid:
+                m["text"] = text
+                if thinking is not None:
+                    m["thinking"] = thinking
+                return True
+        return False
+    _mutate(fn)
 
 
 def stream_end(mid: str, text: str | None = None, thinking: str | None = None) -> None:
     """Finalize a streamed message (clears the streaming flag / cursor)."""
-    rows = _all()
-    for m in rows:
-        if m.get("id") == mid:
-            if text is not None:
-                m["text"] = text
-            if thinking is not None:
-                m["thinking"] = thinking
-            m["streaming"] = False
-            break
-    _rewrite(rows)
+    def fn(rows):
+        for m in rows:
+            if m.get("id") == mid:
+                if text is not None:
+                    m["text"] = text
+                if thinking is not None:
+                    m["thinking"] = thinking
+                m["streaming"] = False
+                return True
+        return False
+    _mutate(fn)
 
 
 def answer(qid: str, text: str) -> bool:
-    rows, found, conv = _all(), False, "general"
-    for m in rows:
-        if m.get("id") == qid and m.get("kind") == "question":
-            m["answered"], m["answer"] = True, text
-            conv = _conv_of(m)
-            found = True
+    box = {"conv": "general"}
+
+    def fn(rows):
+        found = False
+        for m in rows:
+            if m.get("id") == qid and m.get("kind") == "question":
+                m["answered"], m["answer"] = True, text
+                box["conv"] = _conv_of(m)
+                found = True
+        return found
+
+    found = _mutate(fn)
     if found:
-        with open(MSGS, "w") as f:
-            for m in rows:
-                f.write(json.dumps(m) + "\n")
         _append({"id": uuid.uuid4().hex[:8], "ts": _now(), "from": "owner",
-                 "conv": conv, "kind": "answer", "text": text, "ref": qid})
+                 "conv": box["conv"], "kind": "answer", "text": text, "ref": qid})
     return found

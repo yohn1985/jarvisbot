@@ -202,8 +202,10 @@ def _plan_config(d):
         actions.append(_action(d, id="config", desc="Create config.yaml from the example",
                                cmd=["cp", str(ROOT / "config.example.yaml"), str(ROOT / "config.yaml")]))
     if not d["have_env"]:
+        env, ex = str(ROOT / ".env"), str(ROOT / ".env.example")
         actions.append(_action(d, id="env", desc="Create .env from the example (then add secrets)",
-                               cmd=["cp", str(ROOT / ".env.example"), str(ROOT / ".env")]))
+                               # chmod 600 immediately — .env holds secrets and must not be world/group-readable
+                               cmd=["sh", "-c", f"cp {ex!r} {env!r} && chmod 600 {env!r}"]))
     return actions
 
 

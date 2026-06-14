@@ -153,6 +153,16 @@ def _pools(refresh=False):
 _ACTION_VALUES = {"allow", "ask", "deny"}
 
 
+def _write_yaml(path, data):
+    """Atomically persist config (tmp + os.replace) so a concurrent reader/loop never sees a
+    half-written config.yaml and a crash mid-write can't corrupt the file that drives the loop."""
+    import yaml
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, str(path))
+
+
 def _save_config(patch):
     """Merge an owner edit from the CONFIG tab into config.yaml. Returns a human summary of what
     changed. Only known sections are touched; everything else in config.yaml is preserved."""
@@ -204,7 +214,7 @@ def _save_config(patch):
     if isinstance(patch.get("priorities"), list):
         data["priorities"] = [s.strip() for s in patch["priorities"] if str(s).strip()]
         changed.append("priorities")
-    p.write_text(yaml.safe_dump(data, sort_keys=False))
+    _write_yaml(p, data)
     return "saved: " + (", ".join(changed) if changed else "nothing")
 
 
@@ -380,7 +390,7 @@ def _enable_ollama_cloud():
     llm["routing"] = {"triage": flash, "summarizer": flash, "researcher": pro,
                       "orchestrator": pro, "red_team": pro, "fixer": pro}
     llm["fallbacks"] = [flash]
-    p.write_text(yaml.safe_dump(data, sort_keys=False))
+    _write_yaml(p, data)
 
 
 # How each shipped skill is invoked from a chat slash-command. The free text after the slash is
@@ -611,7 +621,7 @@ def _set_main_brain(target):
     routing = data.setdefault("llm", {}).setdefault("routing", {})
     routing["orchestrator"] = target
     routing["red_team"] = target
-    p.write_text(yaml.safe_dump(data, sort_keys=False))
+    _write_yaml(p, data)
 
 
 _MAIN_TARGET = {"openai": "openai:gpt-4o", "anthropic": "anthropic:claude-opus-4-8",
@@ -639,7 +649,7 @@ def _add_frontier_backend(prov):
     if c["fmt"]:
         spec["format"] = c["fmt"]
     llm.setdefault("backends", {})[prov] = spec
-    p.write_text(yaml.safe_dump(data, sort_keys=False))
+    _write_yaml(p, data)
 
 
 def _probe_target(cfg, target):
@@ -868,13 +878,6 @@ class H(BaseHTTPRequestHandler):
                       "webp": "image/webp"}.get(fp.suffix.lstrip("."), "application/octet-stream")
                 return self._send(200, fp.read_bytes(), ct)
             return self._send(404, json.dumps({"error": "not found"}))
-        if u.path == "/api/kill":
-            pid = (parse_qs(u.query).get("pid") or [""])[0]
-            try:
-                os.kill(int(pid), signal.SIGTERM)
-                return self._send(200, json.dumps({"ok": True, "pid": pid}))
-            except Exception as e:
-                return self._send(400, json.dumps({"ok": False, "error": str(e)}))
         return self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
@@ -976,6 +979,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"ok": True, "stored": env_name}))
             except Exception as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
+        if u.path == "/api/kill":            # POST (not GET): a GET here was a CSRF-to-process-kill,
+            pid = str(body.get("pid", ""))   # since a SameSite=Lax cookie rides a top-level GET navigation
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                return self._send(200, json.dumps({"ok": True, "pid": pid}))
+            except Exception as e:
+                return self._send(400, json.dumps({"ok": False, "error": str(e)}))
         try:
             from jarvis import messaging
             if u.path == "/api/answer":
