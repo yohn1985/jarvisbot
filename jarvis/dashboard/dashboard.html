@@ -73,7 +73,7 @@
   .bigbtn:disabled{ opacity:.55; cursor:default; }
   .needyou{ margin-top:16px; border-top:1px solid var(--line); padding-top:12px; color:var(--amber); }
   .setupcard, .welcome{ max-width:100%; }
-  .ascii{ color:var(--grntxt); font-size:11px; line-height:1.05; margin:0 0 8px; white-space:pre; overflow-x:auto; }
+  .ascii{ color:var(--grntxt); font-size:clamp(6px,1.6vw,11px); line-height:1.1; margin:0 0 10px; white-space:pre; overflow:hidden; }
   .brainbtns{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
   .choice{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:8px 12px; border-radius:6px; cursor:pointer; font:inherit; }
   .choice.on{ background:#10241a; border-color:var(--grn); }
@@ -143,6 +143,10 @@ async function saveOllamaKey(){
   await fetch('/api/brain-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:'ollama',key:k})});
   ollamaKeyDraft=''; brainChoice=null; load();
 }
+async function connectOllama(){
+  await fetch('/api/brain-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:'ollama',key:''})});
+  brainChoice=null; load();
+}
 function brainChooser(){
   let h='<div style="margin:6px 0">Power my brain — cheapest is a subscription you already pay for:</div>'
    +'<div class="brainbtns">'
@@ -151,7 +155,12 @@ function brainChooser(){
    +'<button type="button" class="choice'+(brainChoice==='ollama'?' on':'')+'" onclick="chooseBrain(\'ollama\')">Ollama Cloud key</button></div>';
   if(brainChoice==='claude') h+='<div class="braindetail">In a terminal on this machine run <code>claude setup-token</code> (uses your Claude Max/Pro plan), then <button type="button" class="bigbtn" onclick="recheckBrain()">Re-check</button></div>';
   else if(brainChoice==='codex') h+='<div class="braindetail">In a terminal on this machine run <code>codex login</code> (uses your ChatGPT plan), then <button type="button" class="bigbtn" onclick="recheckBrain()">Re-check</button></div>';
-  else if(brainChoice==='ollama') h+='<div class="braindetail">Paste your Ollama Cloud API key (subscription pricing):<div class="ansrow"><input id="ollamakey" type="password" placeholder="ollama cloud key…" oninput="ollamaKeyDraft=this.value" value="'+esc(ollamaKeyDraft)+'"/><button type="button" class="bigbtn" onclick="saveOllamaKey()">Save &amp; connect</button></div></div>';
+  else if(brainChoice==='ollama'){
+    if(setupState && setupState.ollama_key_set)
+      h+='<div class="braindetail">✓ Ollama Cloud key saved. <button type="button" class="bigbtn" onclick="connectOllama()">Connect &amp; re-check</button></div>';
+    else
+      h+='<div class="braindetail">Paste your Ollama Cloud API key (subscription pricing):<div class="ansrow"><input id="ollamakey" type="password" placeholder="ollama cloud key…" oninput="ollamaKeyDraft=this.value" value="'+esc(ollamaKeyDraft)+'"/><button type="button" class="bigbtn" onclick="saveOllamaKey()">Save &amp; connect</button></div></div>';
+  }
   return h;
 }
 function renderSetupCard(cl){

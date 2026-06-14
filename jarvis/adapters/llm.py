@@ -3,13 +3,17 @@ Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prom
 {prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
 falls through to `fallbacks`. Stdlib only."""
 from __future__ import annotations
-import shutil, subprocess
+import json, os, shutil, subprocess, urllib.request
 
 DEFAULT_BACKENDS = {
     "claude": ["claude", "-p", "--model", "{model}"],
     "codex":  ["codex", "exec", "--model", "{model}", "{prompt}"],
     "ollama": ["ollama", "run", "{model}", "{prompt}"],
 }
+
+# A backend may also be an HTTP (OpenAI-compatible) endpoint instead of a CLI list, e.g.:
+#   ollama_cloud: {http: "https://ollama.com/v1/chat/completions", api_key_env: OLLAMA_API_KEY}
+# This covers Ollama Cloud and any OpenAI-compatible API (subscription key, no local CLI needed).
 
 class RoutingLLM:
     def __init__(self, routing, backends, aliases, fallbacks):
@@ -23,11 +27,17 @@ class RoutingLLM:
         return backend, self.aliases.get(model, model)
 
     def _present(self, backend):
-        cmd = self.backends.get(backend)
-        return bool(cmd) and shutil.which(cmd[0]) is not None
+        spec = self.backends.get(backend)
+        if isinstance(spec, dict) and spec.get("http"):       # HTTP backend: present if its key is set
+            env = spec.get("api_key_env")
+            return bool(spec["http"]) and (not env or bool(os.environ.get(env)))
+        return bool(spec) and shutil.which(spec[0]) is not None
 
     def _invoke(self, backend, model, prompt, timeout):
-        cmd = [a.replace("{model}", model) for a in self.backends[backend]]
+        spec = self.backends[backend]
+        if isinstance(spec, dict) and spec.get("http"):
+            return self._invoke_http(spec, model, prompt, timeout)
+        cmd = [a.replace("{model}", model) for a in spec]
         stdin = None
         if any("{prompt}" in a for a in cmd):
             cmd = [a.replace("{prompt}", prompt) for a in cmd]
@@ -37,6 +47,22 @@ class RoutingLLM:
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout or "nonzero").strip()[:200])
         return p.stdout.strip()
+
+    def _invoke_http(self, spec, model, prompt, timeout):
+        """OpenAI-compatible chat completion (covers Ollama Cloud + any OpenAI-style endpoint)."""
+        key = os.environ.get(spec.get("api_key_env", ""), "")
+        body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
+                           "stream": False}).encode()
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        req = urllib.request.Request(spec["http"], data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("empty response from HTTP backend")
+        return (choices[0].get("message", {}).get("content") or "").strip()
 
     def run(self, role, prompt, timeout=120):
         targets, tried = [], []

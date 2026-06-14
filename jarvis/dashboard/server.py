@@ -78,6 +78,22 @@ _EXEC = {"running": False, "last": None}
 _EXEC_LOCK = threading.Lock()
 
 
+def _enable_ollama_cloud():
+    """Point the brain at Ollama Cloud (OpenAI-compatible HTTP) using the stored OLLAMA_API_KEY.
+    deepseek-v4-pro for heavy thinking, deepseek-v4-flash for cheap/fast triage."""
+    import yaml
+    p = ROOT / "config.yaml"
+    data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
+    llm = data.setdefault("llm", {})
+    llm.setdefault("backends", {})["ollama_cloud"] = {
+        "http": "https://ollama.com/v1/chat/completions", "api_key_env": "OLLAMA_API_KEY"}
+    flash, pro = "ollama_cloud:deepseek-v4-flash", "ollama_cloud:deepseek-v4-pro"
+    llm["routing"] = {"triage": flash, "summarizer": flash, "researcher": pro,
+                      "orchestrator": pro, "red_team": pro, "fixer": pro}
+    llm["fallbacks"] = [flash]
+    p.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
 def _setup_state():
     """One simple snapshot the UI uses to show the next thing for the owner to do."""
     try:
@@ -94,6 +110,7 @@ def _setup_state():
                       and not (c["key"] == "brain" and installing_cli)]
         return {"ready": st["ready"], "checks": st["checks"], "plan": plan, "needs_user": needs_user,
                 "running": _EXEC["running"], "last": _EXEC["last"],
+                "ollama_key_set": bool(os.environ.get("OLLAMA_API_KEY")),
                 "complete": st["ready"] and not plan}
     except Exception as e:
         return {"error": str(e)[:200], "checks": [], "plan": [], "running": False, "complete": False}
@@ -184,13 +201,23 @@ class H(BaseHTTPRequestHandler):
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
         if u.path == "/api/brain-key":
             prov, key = (body.get("provider") or "").strip(), (body.get("key") or "").strip()
-            if not key:
-                return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
             try:
                 from jarvis.bootstrap import secrets
                 env_name = {"ollama": "OLLAMA_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
                             "openai": "OPENAI_API_KEY"}.get(prov, prov.upper() + "_API_KEY")
-                secrets.set_secret(env_name, key)
+                if key:
+                    secrets.set_secret(env_name, key)
+                if prov == "ollama":
+                    secrets.load_env()
+                    if not os.environ.get("OLLAMA_API_KEY"):
+                        return self._send(400, json.dumps({"ok": False, "error": "no Ollama key stored yet"}))
+                    _enable_ollama_cloud()                 # wire backend + routing to the stored key
+                    from jarvis.config import load
+                    from jarvis.bootstrap import preflight
+                    ok, detail = preflight.recheck_brain(load())   # probe now -> brain live
+                    return self._send(200, json.dumps({"ok": ok, "detail": detail}))
+                if not key:
+                    return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
                 return self._send(200, json.dumps({"ok": True, "stored": env_name}))
             except Exception as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
