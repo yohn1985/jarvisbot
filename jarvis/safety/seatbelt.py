@@ -76,7 +76,9 @@ def propose_self_edit(cfg: dict, apply_change, rationale: str, red_team=None) ->
         return {"adopted": False, "reason": f"apply failed: {e}", "rolled_back_to": tag}
     new = fitness()
     improved = new.get("score", 0) >= base.get("score", 0)
-    survived = bool(red_team(rationale)) if red_team else improved
+    # Invariant 3(b): a self-edit is adopted ONLY if it survives an INDEPENDENT red-team. If no
+    # red-team is supplied we must NOT rubber-stamp on "fitness didn't drop" — fail closed (rollback).
+    survived = bool(red_team(rationale)) if red_team else False
     if improved and survived:
         _git("add", "-A")
         _git("commit", "-m", f"self-edit: {rationale[:60]} (fitness {base.get('score')}->{new.get('score')})")

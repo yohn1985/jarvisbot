@@ -150,14 +150,27 @@ def extract_questions(doc: str):
     return qs
 
 
+_STOPWORDS = {"the", "a", "an", "is", "are", "of", "to", "in", "on", "for", "what", "which", "how",
+              "does", "do", "this", "that", "and", "or", "its", "it", "be", "with", "by", "any"}
+
+
+def _qnorm(q: str) -> frozenset:
+    """Normalized fingerprint of a question (significant word stems) so near-duplicates like
+    'what role does host .50 play' and 'what is the role of host .50' collapse to one."""
+    toks = re.findall(r"[a-z0-9.]+", (q or "").lower())
+    return frozenset(t for t in toks if t not in _STOPWORDS and len(t) > 1)
+
+
 def add_questions(qs):
     queue = _load_q()
-    have = {(x.get("q") or "").lower() for x in queue}
+    have = {_qnorm(x.get("q") or "") for x in queue}
     for q in qs:
-        if q.lower() not in have:
+        q = (q or "").strip()
+        fp = _qnorm(q)
+        if q and fp and fp not in have:      # dedup by meaning, not exact string
             queue.append({"id": uuid.uuid4().hex[:8], "q": q, "answered": False,
                           "answer": None, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
-            have.add(q.lower())
+            have.add(fp)
     _save_q(queue)
 
 
@@ -210,24 +223,61 @@ def answer_one(llm):
               f"WEB EVIDENCE (live):\n{web or '(none gathered)'}\n\n"
               f"YOUR NOTES:\n{_known_context()}")
     ans = llm.run("orchestrator", prompt, timeout=180).strip()
-    # deep-fix discipline: red-team the answer; revise once if it doesn't survive.
+    # deep-fix discipline: red-team the answer. Only REVISE when the check actually ran AND broke it
+    # (verified=True, survives=False) — an un-run check (verified=False) must not trigger churn, but it
+    # is recorded honestly as 'unverified' rather than silently trusted.
+    verified = None
     try:
         from jarvis.config import load as _load
         from jarvis import verify as _verify
         ctx = _known_context()
         v = _verify.verify(_load(), ans, context=ctx)
-        if not v["survives"]:
+        if v.get("verified") and not v.get("survives"):
             ans = llm.run("orchestrator",
                           f"Your draft answer was challenged by a red-team check. Critique:\n{v['critique']}\n\n"
                           f"QUESTION: {nxt['q']}\nRevise to honestly address it; if still unsure, say what's "
                           f"unverified.\n\nNOTES:\n{ctx}", timeout=180).strip()
+            v2 = _verify.verify(_load(), ans, context=ctx)
+            verified = bool(v2.get("survives"))
+        else:
+            verified = bool(v.get("survives"))
     except Exception:
-        pass
+        verified = None
+
+    # Don't file ignorance as knowledge: if the model says it can't answer, keep the question OPEN and
+    # retry next cycle (discovery/web may fill the gap); after a few tries, escalate to the owner.
+    unresolved = (len(ans) < 400 and bool(re.search(
+        r"\b(cannot|can't|can not|unable to|don't know|do not know|insufficient|not enough|need (more|the|to)|unclear|no (information|data|way to))\b",
+        ans.lower())))
+    nxt["attempts"] = int(nxt.get("attempts", 0)) + 1
+    if unresolved and nxt["attempts"] < 3:
+        _save_q(queue)
+        return nxt["q"], ans
+
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
     note = KNOW_DIR / f"{_slug(nxt['q'])}.md"     # logical name per question, updated in place
-    note.write_text(f"# Q: {nxt['q']}\n_answered {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{ans}\n")
-    nxt["answered"], nxt["answer"] = True, ans[:400]
+    flag = "" if verified else "\n\n> ⚠ unverified — the red-team check did not confirm this."
+    note.write_text(f"# Q: {nxt['q']}\n_answered {time.strftime('%Y-%m-%d %H:%M:%S')} · verified={verified}_\n\n{ans}\n{flag}")
+    nxt["answered"], nxt["answer"], nxt["verified"] = True, ans[:400], verified
     _save_q(queue)
+
+    if unresolved:                                # genuinely stuck -> ask the owner (close the human loop)
+        try:
+            from jarvis import messaging
+            messaging.post_question(f"I couldn't resolve this on my own after {nxt['attempts']} tries: {nxt['q']}",
+                                    ref="curiosity", conv="suggestions", title="Suggestions")
+        except Exception:
+            pass
+    elif verified:                                # a good answer exposes the next unknown -> keep learning
+        try:
+            fu = llm.run("summarizer",
+                         "From the answer below, list 0-3 SPECIFIC, non-duplicate follow-up questions that "
+                         "would deepen understanding or resolve a stated unknown. One per line, no numbering. "
+                         "If nothing is worth asking, output nothing.\n\nANSWER:\n" + ans[:1500], timeout=60)
+            add_questions([re.sub(r"^[-*\d.\s]+", "", l).strip() for l in (fu or "").splitlines()
+                           if len(l.strip()) > 12][:3])
+        except Exception:
+            pass
     write_index()
     return nxt["q"], ans
 

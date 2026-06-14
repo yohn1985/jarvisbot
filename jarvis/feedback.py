@@ -18,12 +18,11 @@ def record(cfg, *, kind, area="", summary="", outcome="", detail=""):
     """Record one experience (an action + how it went)."""
     row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "area": area,
            "summary": summary, "outcome": outcome, "detail": (detail or "")[:1000]}
-    try:                                  # queryable long-term memory when a DB is up
-        from jarvis.memory.store import build_store
-        s = build_store(cfg)
-        if s.backend == "postgres":
-            s.remember(sig=f"{kind}:{area}:{summary[:40]}", area=area, source="jarvis",
-                       label=kind, symptom=summary, outcome=outcome, resolution=(detail or "")[:400])
+    try:                                  # causal long-term memory: persist on EITHER backend so the
+        from jarvis.memory.store import build_store   # reflect step actually reaches recall (perceive/think)
+        build_store(cfg).remember(
+            sig=f"{kind}:{area}:{(summary or '')[:40]}", area=area, source="jarvis",
+            label=kind, symptom=summary, outcome=outcome, resolution=(detail or "")[:400])
     except Exception:
         pass
     try:                                  # always-on local trail (works with no DB)

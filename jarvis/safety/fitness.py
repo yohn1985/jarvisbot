@@ -27,14 +27,24 @@ def c_syntax():
 
 
 def c_kernel_ticks():
-    """The kernel still produces a valid decision (LLM disabled for determinism)."""
+    """The decision pipeline still produces a valid rung. SHADOW only: perceive+decide, never act() —
+    a full kernel.tick() inside the gate could launch a ~300s network scan / LLM calls."""
     code = ("import sys; sys.path.insert(0, '.');"
             "from jarvis import kernel; from jarvis.config import load;"
-            "c = load(); c.setdefault('llm', {})['think_on_tick'] = False;"
-            "d = kernel.tick(c); print('RUNG=' + str(d.get('rung')))")
+            "c = load(); w = kernel.perceive(c); rung, action = kernel.decide(c, w);"
+            "print('RUNG=' + str(rung))")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                        cwd=str(ROOT), env={"PATH": "/usr/bin:/bin", "JARVIS_NO_THINK": "1"})
     return ("kernel_ticks", "RUNG=p" in r.stdout, (r.stderr or r.stdout).strip()[-160:])
+
+
+def c_verify_failclosed():
+    """Guards the keystone: verify() must FAIL CLOSED — with no brain it must NOT return survives."""
+    code = ("import sys; sys.path.insert(0, '.');"
+            "from jarvis.verify import verify; v = verify({}, 'x');"
+            "print('VFC=' + ('ok' if (v.get('survives') is False and v.get('verified') is False) else 'FAIL'))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(ROOT))
+    return ("verify_fail_closed", "VFC=ok" in r.stdout, (r.stderr or r.stdout).strip()[-160:])
 
 
 def c_router_builds():
@@ -46,11 +56,17 @@ def c_router_builds():
 
 
 def c_memory_reads():
-    code = ("import sys; sys.path.insert(0, '.');"
+    """REAL round-trip: write an episode then recall it (the old check passed even on dead memory).
+    Uses a throwaway JARVIS_LEDGER so it never pollutes the live ledger."""
+    code = ("import sys, os, tempfile; sys.path.insert(0, '.');"
+            "os.environ['JARVIS_LEDGER'] = tempfile.mktemp(suffix='.jsonl');"
             "from jarvis.config import load; from jarvis.memory.store import build_store;"
-            "s = build_store(load()); print('MEM=' + s.backend + ':' + str(len(s.recent(3))))")
+            "s = build_store(load());"
+            "s.remember(sig='_fit_rt', area='_fit', label='fit', symptom='rt', outcome='ok');"
+            "hit = any(r.get('sig') == '_fit_rt' for r in s.recall(area='_fit', limit=20));"
+            "print('MEMRT=' + ('ok:' + s.backend if hit else 'FAIL'))")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(ROOT))
-    return ("memory_reads", "MEM=" in r.stdout, (r.stderr or "").strip()[-160:])
+    return ("memory_roundtrip", "MEMRT=ok" in r.stdout, (r.stderr or r.stdout).strip()[-160:])
 
 
 def c_working_mem():
@@ -62,7 +78,8 @@ def c_working_mem():
 
 
 def main():
-    checks = [c_syntax(), c_kernel_ticks(), c_router_builds(), c_memory_reads(), c_working_mem()]
+    checks = [c_syntax(), c_kernel_ticks(), c_verify_failclosed(), c_router_builds(),
+              c_memory_reads(), c_working_mem()]
     score = sum(1 for _, ok, _ in checks if ok)
     print(json.dumps({"score": score, "max": len(checks),
                       "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]}))

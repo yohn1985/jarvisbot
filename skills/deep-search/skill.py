@@ -48,7 +48,14 @@ def synthesize(llm, question: str, trace: str, packs: str):
     redteam = llm.run("red_team",
                       f"PROVE THIS WRONG or INCOMPLETE — find a broken consumer, an unswept sibling, or "
                       f"that it doesn't address the root cause:\n{plan[:6000]}\n\n"
-                      "End with a verdict: 'survives' or 'broken: <file:line reason>'.", timeout=120)
+                      "End with EXACTLY one line: 'VERDICT: survives' or 'VERDICT: broken: <file:line reason>'.",
+                      timeout=120)
+    # Act on the verdict instead of ignoring it: if the red-team broke the plan, revise once.
+    if "verdict: broken" in (redteam or "").lower():
+        plan = llm.run("orchestrator",
+                       f"Your plan was broken by a red-team review. CRITIQUE:\n{redteam[:4000]}\n\n"
+                       f"ORIGINAL PLAN:\n{plan[:6000]}\n\nRevise to address every point; if something "
+                       "cannot be resolved from the trace, say so explicitly.", timeout=180)
     return plan, redteam
 
 

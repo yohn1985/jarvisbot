@@ -1,6 +1,7 @@
 """Config loader: DEFAULTS <- config.example.yaml (documented base) <- config.yaml (your
 deltas) <- .env (secrets). Deep-merged, so your config.yaml stays tiny. Degrades gracefully
 (runs on DEFAULTS alone if pyyaml is absent)."""
+import copy
 from pathlib import Path
 
 DEFAULTS = {
@@ -29,8 +30,8 @@ def load(root: str | None = None) -> dict:
         secrets.load_env()
     except Exception:
         pass
-    cfg = dict(DEFAULTS)
-    try:
+    cfg = copy.deepcopy(DEFAULTS)   # deep copy: _merge mutates nested dicts; a shallow copy would
+    try:                            # bleed config edits into the module-global DEFAULTS across calls
         import yaml  # optional; shadow mode runs without it
     except Exception:
         return cfg
