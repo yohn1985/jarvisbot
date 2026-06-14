@@ -819,22 +819,21 @@ install_service(){
   command -v systemctl >/dev/null 2>&1 || die "no systemd (systemctl) on this host"
   log "install-service: user=$U dir=$DIR sudo=$MODE"
   id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$DIR" --shell /usr/sbin/nologin "$U"
-  mkdir -p "$DIR"
-  if [ "$ROOT" != "$DIR" ]; then
-    [ -f "$ROOT/state/dashboard.pid" ] && kill "$(cat "$ROOT/state/dashboard.pid")" 2>/dev/null || true
-    cp -a "$ROOT"/. "$DIR"/ && rm -rf "$DIR/.git"
-  fi
-  chown -R "$U":"$U" "$DIR"
-  # scoped sudoers = only what the agent legitimately needs unattended; yolo = full root (opt-in).
+  # 1) sudoers FIRST + validated, before disrupting anything. sudoers forbids wildcards in command
+  # ARGS, so scoped = the whole apt-get/systemctl binaries (still far better than full root);
+  # yolo opt-in = full root. (Hardened single-helper-script scoping is a future improvement.)
   if [ "$MODE" = yolo ]; then
     echo "jarvis ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jarvis
   else
-    cat > /etc/sudoers.d/jarvis <<'SUD'
-jarvis ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get install *, /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start jarvis-*, /usr/bin/systemctl stop jarvis-*, /usr/bin/systemctl restart jarvis-*, /usr/bin/systemctl enable jarvis-*, /usr/bin/systemctl disable jarvis-*
-SUD
+    printf '%s\n' 'jarvis ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl' > /etc/sudoers.d/jarvis
   fi
   chmod 0440 /etc/sudoers.d/jarvis
   visudo -cf /etc/sudoers.d/jarvis >/dev/null || { rm -f /etc/sudoers.d/jarvis; die "generated sudoers invalid"; }
+  # 2) relocate to a jarvis-owned dir (no killing yet)
+  mkdir -p "$DIR"
+  [ "$ROOT" != "$DIR" ] && { cp -a "$ROOT"/. "$DIR"/ && rm -rf "$DIR/.git"; }
+  chown -R "$U":"$U" "$DIR"
+  # 3) systemd units
   cat > /etc/systemd/system/jarvis-loop.service <<EOF
 [Unit]
 Description=Jarvis wake loop
@@ -864,6 +863,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
+  # 4) hand :8787 from the landing dashboard to the durable service (kill the old one LAST)
+  [ -f "$ROOT/state/dashboard.pid" ] && kill "$(cat "$ROOT/state/dashboard.pid")" 2>/dev/null || true
+  pkill -f "dashboard/server.py" 2>/dev/null || true
+  sleep 1
   systemctl enable --now jarvis-loop.service jarvis-dashboard.service
   log "service installed + enabled (survives reboot). dashboard: $(dash_url)"
 }
