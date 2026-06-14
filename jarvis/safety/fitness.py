@@ -53,8 +53,16 @@ def c_memory_reads():
     return ("memory_reads", "MEM=" in r.stdout, (r.stderr or "").strip()[-160:])
 
 
+def c_working_mem():
+    code = ("import sys; sys.path.insert(0, '.');"
+            "from jarvis.config import load; from jarvis.memory.working import build_working;"
+            "w = build_working(load()); w.set('_fit', '1'); print('WM=' + w.backend + ':' + str(w.get('_fit')))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(ROOT))
+    return ("working_mem", "WM=" in r.stdout and ":1" in r.stdout, (r.stderr or "").strip()[-160:])
+
+
 def main():
-    checks = [c_syntax(), c_kernel_ticks(), c_router_builds(), c_memory_reads()]
+    checks = [c_syntax(), c_kernel_ticks(), c_router_builds(), c_memory_reads(), c_working_mem()]
     score = sum(1 for _, ok, _ in checks if ok)
     print(json.dumps({"score": score, "max": len(checks),
                       "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]}))

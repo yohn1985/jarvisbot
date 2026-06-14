@@ -775,7 +775,7 @@ doctor(){
   deps; echo
   log "fitness (tamper-proof self-check):"; "$(pybin)" "$ROOT/jarvis/safety/fitness.py" 2>/dev/null | sed 's/^/  /'
   log "dashboard:"; ss -ltnp 2>/dev/null | grep -q ':8787' && log "  up on :8787" || warn "  not running (./install.sh dashboard)"
-  log "memory backend:"; "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;print('  ',build_store(load()).backend)" 2>/dev/null
+  log "memory backends:"; "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;from jarvis.memory.working import build_working;c=load();print('  episodic:',build_store(c).backend,'| working:',build_working(c).backend)" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------

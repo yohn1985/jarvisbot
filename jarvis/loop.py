@@ -46,6 +46,9 @@ def run(once: bool = False):
         tg = TelegramNotifier()
     except Exception:
         tg = None
+    from jarvis.memory.working import build_working
+    wm = build_working(load())              # working memory (redis) for the cross-tick lock
+    print(f"[jarvis] working memory: {wm.backend}")
     while not stop["v"]:
         cfg = load()                        # live config reload each wake
         if tg and tg.enabled:               # ingest owner replies from Telegram into the chat
@@ -55,7 +58,13 @@ def run(once: bool = False):
                     messaging.say(txt, conv="telegram", title="Telegram")
             except Exception:
                 pass
-        decision = kernel.tick(cfg)
+        if not wm.lock("tick", ttl=600):    # don't let two loops/ticks collide (stigmergy)
+            time.sleep(5)
+            continue
+        try:
+            decision = kernel.tick(cfg)
+        finally:
+            wm.unlock("tick")
         delay = next_delay(cfg, decision)
         print(f"[jarvis] tick {decision['ts']} rung={decision['rung']} -> next wake in {delay}s")
         if once:
