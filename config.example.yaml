@@ -37,6 +37,7 @@ llm:
 memory:
   working:   {kind: redis,    url: redis://localhost:6379/0}
   episodic:  {kind: postgres, dsn: "postgresql://jarvis:${POSTGRES_PASSWORD}@localhost:5432/ai_memory"}
+  # episodic may also set  ledger: /path/to/external.jsonl  (read fallback when postgres is down)
   semantic:  {kind: none}    # none | mem0 | zep   (add when needed)
 
 notifier:
@@ -45,7 +46,11 @@ notifier:
 
 worksource:
   kind: folder               # folder | gitea | github
-  path: ./tasks
+  path: ./tasks              # for 'folder'
+  # for 'gitea', set these in config.yaml (NEVER commit your infra into this example):
+  #   api: http://your-gitea:3000/api/v1
+  #   repo: owner/findings-repo
+  #   token_cmd: /path/to/script-that-prints-a-gitea-token.sh
 
 # Jarvis's hands. Each worker = a command template ({target}) + the action_class it needs.
 # Generic no-op examples here; override in config.yaml with your real tools (deep-fix, fixer).

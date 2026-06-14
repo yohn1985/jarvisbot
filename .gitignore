@@ -7,3 +7,5 @@ output/
 db/data/
 state/
 config.yaml
+deploy/
+extras/

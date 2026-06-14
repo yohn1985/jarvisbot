@@ -15,10 +15,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _default_ledger() -> str | None:
-    for c in ("/home/yohn/nightly-audit/loopback/ledger.jsonl", str(ROOT / "state" / "ledger.jsonl")):
-        if Path(c).exists():
-            return c
-    return None
+    # Generic default only; env-specific ledger path comes from config (memory.episodic.ledger).
+    p = ROOT / "state" / "ledger.jsonl"
+    return str(p) if p.exists() else None
 
 
 def ledger_signals(cfg: dict) -> dict:
@@ -61,11 +60,14 @@ def worksource(cfg: dict) -> list[str]:
 
 
 def _gitea_open(ws: dict) -> list[str]:
-    """Optional, config-gated. Reads open finding titles. Best-effort; never raises out."""
+    """Optional, fully config-driven. api/repo/token_cmd come from config.yaml — no infra is
+    hardcoded in the core. Missing config => no gitea backlog. Best-effort; never raises out."""
     import subprocess, urllib.request
-    base = ws.get("api", "http://10.6.112.9:3000/api/v1")
-    repo = ws.get("repo", "superadmin/leedagent-findings")
-    tok_cmd = ws.get("token_cmd", "/home/yohn/nightly-audit/gitea-token.sh")
+    base = ws.get("api")
+    repo = ws.get("repo")
+    tok_cmd = ws.get("token_cmd")
+    if not (base and repo and tok_cmd):
+        return []
     try:
         tok = subprocess.run([tok_cmd], capture_output=True, text=True, timeout=10).stdout.strip()
         req = urllib.request.Request(

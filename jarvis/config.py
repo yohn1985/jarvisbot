@@ -22,14 +22,16 @@ def _merge(base: dict, over: dict) -> dict:
     return base
 
 def load(root: str | None = None) -> dict:
+    import os
     root = Path(root or Path(__file__).resolve().parent.parent)
     cfg = dict(DEFAULTS)
     try:
         import yaml  # optional; shadow mode runs without it
     except Exception:
         return cfg
-    for name in ("config.example.yaml", "config.yaml"):  # base, then your overrides
-        p = root / name
+    extras = Path(os.environ.get("JARVIS_EXTRAS", root / "extras"))
+    # precedence: DEFAULTS <- example (generic) <- config.yaml (local) <- extras/config.yaml (private overlay)
+    for p in (root / "config.example.yaml", root / "config.yaml", extras / "config.yaml"):
         if p.exists():
             try:
                 _merge(cfg, yaml.safe_load(p.read_text()) or {})

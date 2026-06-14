@@ -19,10 +19,10 @@ def _expand(s: str) -> str:
 
 
 def _default_ledger() -> str | None:
-    for c in ("/home/yohn/nightly-audit/loopback/ledger.jsonl", str(ROOT / "state" / "ledger.jsonl")):
-        if Path(c).exists():
-            return c
-    return None
+    # Generic default only. An env-specific external ledger goes in config.yaml as
+    # memory.episodic.ledger (never hardcoded in the open-source core).
+    p = ROOT / "state" / "ledger.jsonl"
+    return str(p) if p.exists() else None
 
 
 class EpisodicStore:
@@ -44,7 +44,8 @@ class EpisodicStore:
 
     # --- jsonl fallback source ---
     def _jsonl(self) -> list[dict]:
-        p = _default_ledger()
+        ep = (self.cfg.get("memory", {}).get("episodic", {}) or {})
+        p = ep.get("ledger") or _default_ledger()   # config first, then generic state/ledger.jsonl
         if not p:
             return []
         out = []

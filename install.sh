@@ -114,6 +114,8 @@ output/
 db/data/
 state/
 config.yaml
+deploy/
+extras/
 EOF
 
   gen .env.example <<'EOF'
@@ -166,6 +168,7 @@ llm:
 memory:
   working:   {kind: redis,    url: redis://localhost:6379/0}
   episodic:  {kind: postgres, dsn: "postgresql://jarvis:${POSTGRES_PASSWORD}@localhost:5432/ai_memory"}
+  # episodic may also set  ledger: /path/to/external.jsonl  (read fallback when postgres is down)
   semantic:  {kind: none}    # none | mem0 | zep   (add when needed)
 
 notifier:
@@ -174,7 +177,11 @@ notifier:
 
 worksource:
   kind: folder               # folder | gitea | github
-  path: ./tasks
+  path: ./tasks              # for 'folder'
+  # for 'gitea', set these in config.yaml (NEVER commit your infra into this example):
+  #   api: http://your-gitea:3000/api/v1
+  #   repo: owner/findings-repo
+  #   token_cmd: /path/to/script-that-prints-a-gitea-token.sh
 
 # Jarvis's hands. Each worker = a command template ({target}) + the action_class it needs.
 # Generic no-op examples here; override in config.yaml with your real tools (deep-fix, fixer).
@@ -289,14 +296,16 @@ def _merge(base: dict, over: dict) -> dict:
     return base
 
 def load(root: str | None = None) -> dict:
+    import os
     root = Path(root or Path(__file__).resolve().parent.parent)
     cfg = dict(DEFAULTS)
     try:
         import yaml  # optional; shadow mode runs without it
     except Exception:
         return cfg
-    for name in ("config.example.yaml", "config.yaml"):  # base, then your overrides
-        p = root / name
+    extras = Path(os.environ.get("JARVIS_EXTRAS", root / "extras"))
+    # precedence: DEFAULTS <- example (generic) <- config.yaml (local) <- extras/config.yaml (private overlay)
+    for p in (root / "config.example.yaml", root / "config.yaml", extras / "config.yaml"):
         if p.exists():
             try:
                 _merge(cfg, yaml.safe_load(p.read_text()) or {})
@@ -647,9 +656,11 @@ scaffold_skills(){
 A skill is a self-contained folder (manifest + code + own requirements), so the
 skills/ tree is a modular, extensible repo — drop in a folder, it's a new capability.
 The mind lists skills (cheap), reads a SKILL.md just-in-time, and invokes the entrypoint."""
-import sys, re, json
+import os, sys, re, json
 from pathlib import Path
-SKILLS = Path(__file__).resolve().parent.parent / "skills"
+ROOT = Path(__file__).resolve().parent.parent
+# Skills come from the core skills/ AND the private overlay extras/skills/ (operator add-ons).
+SKILL_DIRS = [ROOT / "skills", Path(os.environ.get("JARVIS_EXTRAS", ROOT / "extras")) / "skills"]
 
 def _frontmatter(md: str) -> dict:
     m = re.match(r"^---\n(.*?)\n---", md, re.S); fm = {}
@@ -661,9 +672,10 @@ def _frontmatter(md: str) -> dict:
 
 def list_skills() -> list:
     out = []
-    for d in sorted(SKILLS.glob("*/SKILL.md")):
-        fm = _frontmatter(d.read_text()); fm["dir"] = str(d.parent)
-        fm.setdefault("name", d.parent.name); out.append(fm)
+    for base in SKILL_DIRS:
+        for d in sorted(base.glob("*/SKILL.md")):
+            fm = _frontmatter(d.read_text()); fm["dir"] = str(d.parent)
+            fm.setdefault("name", d.parent.name); out.append(fm)
     return out
 
 if __name__ == "__main__":
