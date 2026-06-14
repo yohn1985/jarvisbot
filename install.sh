@@ -806,9 +806,68 @@ land(){
   log "Open that page to finish setup — approve installs and give Jarvis its AI brain."
 }
 
+# Make Jarvis durable: a dedicated least-privilege 'jarvis' user, scoped (or yolo) sudoers, the
+# install relocated to a jarvis-owned dir, and systemd units that restart + start on boot.
+# Privileged — run as root (interactive first-run), NOT from the dashboard (it stops the loop/dash).
+install_service(){
+  [ "$(id -u)" -eq 0 ] || die "install-service must run as root (sudo ./install.sh install-service)"
+  local U=jarvis DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" MODE="${JARVIS_SUDO:-scoped}"
+  command -v systemctl >/dev/null 2>&1 || die "no systemd (systemctl) on this host"
+  log "install-service: user=$U dir=$DIR sudo=$MODE"
+  id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$DIR" --shell /usr/sbin/nologin "$U"
+  mkdir -p "$DIR"
+  if [ "$ROOT" != "$DIR" ]; then
+    [ -f "$ROOT/state/dashboard.pid" ] && kill "$(cat "$ROOT/state/dashboard.pid")" 2>/dev/null || true
+    cp -a "$ROOT"/. "$DIR"/ && rm -rf "$DIR/.git"
+  fi
+  chown -R "$U":"$U" "$DIR"
+  # scoped sudoers = only what the agent legitimately needs unattended; yolo = full root (opt-in).
+  if [ "$MODE" = yolo ]; then
+    echo "jarvis ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jarvis
+  else
+    cat > /etc/sudoers.d/jarvis <<'SUD'
+jarvis ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get install *, /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start jarvis-*, /usr/bin/systemctl stop jarvis-*, /usr/bin/systemctl restart jarvis-*, /usr/bin/systemctl enable jarvis-*, /usr/bin/systemctl disable jarvis-*
+SUD
+  fi
+  chmod 0440 /etc/sudoers.d/jarvis
+  visudo -cf /etc/sudoers.d/jarvis >/dev/null || { rm -f /etc/sudoers.d/jarvis; die "generated sudoers invalid"; }
+  cat > /etc/systemd/system/jarvis-loop.service <<EOF
+[Unit]
+Description=Jarvis wake loop
+After=network-online.target
+[Service]
+Type=simple
+User=$U
+WorkingDirectory=$DIR
+ExecStart=$DIR/install.sh run
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/jarvis-dashboard.service <<EOF
+[Unit]
+Description=Jarvis dashboard
+After=network-online.target
+[Service]
+Type=simple
+User=$U
+WorkingDirectory=$DIR
+ExecStart=$DIR/install.sh dashboard --host 0.0.0.0 --port 8787
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now jarvis-loop.service jarvis-dashboard.service
+  log "service installed + enabled (survives reboot). dashboard: $(dash_url)"
+}
+
 case "${1:-scaffold}" in
   scaffold) scaffold; echo; deps; echo; land;;
   setup|land) land;;
+  install-service|service) install_service;;
   deps)     deps "${2:-}";;
   initdb)   initdb;;
   migrate)  migrate;;
