@@ -95,7 +95,8 @@ def perceive(cfg: dict) -> dict:
         "self_caused_regression": (code_defects[0].get("sig") if code_defects else None),
         "self_maintenance": (improvements[0].get("sig") if improvements else None),
         "needs_human_backlog": backlog,
-        "stalest_area": "telephony/whatsapp",          # TODO: knowledge_map staleness
+        "stalest_area": "environment",                 # generic curiosity trigger; real curiosity is
+                                                       # driven by the question queue + discovery staleness
         "_ledger": led,
         "_backlog_count": len(backlog),
     }

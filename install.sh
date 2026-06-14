@@ -337,7 +337,7 @@ def perceive(cfg) -> dict:
     except Exception:
         return {"active_incident": None, "unfinished_wip": None,
                 "self_caused_regression": None, "needs_human_backlog": [],
-                "stalest_area": "telephony/whatsapp"}
+                "stalest_area": "environment"}
 
 def orient(cfg, world) -> str:
     # Rebuild "who am I" from memory. Stub: identity from config.
