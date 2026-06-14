@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Jarvis</title>
+<style>
+  :root{ --bg:#0c0f0d; --panel:#11150f; --line:#1d2a1d; --txt:#c8d6c4; --dim:#6f7e6b;
+         --grn:#3fae5a; --grnpill:#16301c; --grntxt:#7fe39a; --amber:#d8a13a; --red:#d85a5a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt); font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  header{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); }
+  header .title{ letter-spacing:2px; color:var(--grntxt); font-weight:600; }
+  header .meta{ color:var(--dim); }
+  nav{ display:flex; gap:4px; padding:8px 18px 0; }
+  nav button{ background:none; border:none; color:var(--dim); padding:8px 14px; cursor:pointer; letter-spacing:1px; border-bottom:2px solid transparent; }
+  nav button.active{ color:var(--grntxt); border-bottom-color:var(--grn); }
+  main{ padding:14px 18px; }
+  table{ width:100%; border-collapse:collapse; }
+  th{ text-align:left; color:var(--dim); font-weight:500; letter-spacing:1px; padding:8px 10px; border-bottom:1px solid var(--line); font-size:11px; }
+  td{ padding:9px 10px; border-bottom:1px solid #141a13; vertical-align:top; }
+  tr:hover td{ background:#0f140e; }
+  .pill{ background:var(--grnpill); color:var(--grntxt); padding:2px 8px; border-radius:3px; font-size:12px; }
+  .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; }
+  .run .dot{ background:var(--grn); box-shadow:0 0 6px var(--grn); }
+  .ok .dot{ background:#2b6f3c; } .would .dot{ background:var(--amber); } .failed .dot{ background:var(--red); }
+  .kill{ color:var(--red); border:1px solid #3a1f1f; background:none; padding:1px 7px; border-radius:3px; cursor:pointer; font-size:11px; }
+  .cfg{ display:grid; grid-template-columns:200px 1fr; gap:6px 18px; }
+  .cfg .k{ color:var(--dim); } .cfg pre{ margin:0; color:var(--txt); white-space:pre-wrap; }
+  .card{ border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:14px; background:var(--panel); }
+  .card h3{ margin:0 0 10px; color:var(--grntxt); font-size:12px; letter-spacing:1px; font-weight:600; }
+  .mode-shadow{ color:var(--amber); } .mode-autonomous{ color:var(--grntxt); }
+  .empty{ color:var(--dim); padding:18px 10px; }
+  .refresh{ background:none; border:1px solid var(--line); color:var(--dim); padding:3px 10px; border-radius:3px; cursor:pointer; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">● JARVIS</div>
+  <div class="meta"><span id="procs">0 procs</span> · mode <span id="mode">—</span> · updated <span id="upd">—</span>
+     <button class="refresh" onclick="load()">refresh</button></div>
+</header>
+<nav>
+  <button id="tab-runs" class="active" onclick="show('runs')">RUNS</button>
+  <button id="tab-config" onclick="show('config')">CONFIG</button>
+  <button id="tab-procs" onclick="show('procview')">PROCESSES</button>
+</nav>
+<main>
+  <section id="runs">
+    <table><thead><tr><th>TIME</th><th>MODE</th><th>POOL</th><th>MODEL</th><th>STATUS</th><th>DURATION</th><th>TARGET</th></tr></thead>
+    <tbody id="runs-body"></tbody></table>
+    <div id="runs-empty" class="empty" hidden>No runs yet — run <code>./install.sh breathe</code>.</div>
+  </section>
+  <section id="config" hidden></section>
+  <section id="procview" hidden>
+    <table><thead><tr><th>PID</th><th>UPTIME</th><th>COMMAND</th><th></th></tr></thead>
+    <tbody id="procs-body"></tbody></table>
+    <div id="procs-empty" class="empty" hidden>No live Jarvis processes.</div>
+  </section>
+</main>
+<script>
+function show(id){
+  for(const s of ['runs','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
+  document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
+}
+function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
+async function load(){
+  const [runs,cfg,procs] = await Promise.all([
+    fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()), fetch('/api/procs').then(r=>r.json())]);
+  // runs
+  const rb=document.getElementById('runs-body'); rb.innerHTML='';
+  document.getElementById('runs-empty').hidden = runs.length>0;
+  for(const r of runs){
+    const cls=statusClass(r.status);
+    rb.insertAdjacentHTML('beforeend',
+     `<tr class="${cls}"><td>${(r.ts||'').replace('T',' ')}</td>`+
+     `<td><span class="pill">${r.mode||''}</span></td><td>${r.pool||''}</td><td>${r.model||''}</td>`+
+     `<td><span class="dot"></span>${r.status||''}</td><td>${r.duration??'—'}</td><td>${r.target||''}</td></tr>`);
+  }
+  // config
+  const cs=document.getElementById('config'); cs.innerHTML='';
+  const c=(cfg.config)||{}; const idn=c.identity||{};
+  document.getElementById('mode').textContent=idn.mode||'—';
+  document.getElementById('mode').className='mode-'+(idn.mode||'');
+  const card=(title,inner)=>`<div class="card"><h3>${title}</h3>${inner}</div>`;
+  const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
+     `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
+  cs.innerHTML = card('IDENTITY', kv(idn))
+    + card('ACTION CLASSES (what it may do without asking)', kv(c.action_classes))
+    + card('LLM ROUTING (role → model)', kv((c.llm||{}).routing))
+    + card('PRIORITY LADDER', '<pre>'+(c.priorities||[]).map((p,i)=>`${i}. ${p}`).join('\n')+'</pre>')
+    + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
+  // procs
+  const pb=document.getElementById('procs-body'); pb.innerHTML='';
+  document.getElementById('procs').textContent=procs.length+' procs';
+  document.getElementById('procs-empty').hidden = procs.length>0;
+  for(const p of procs){
+    pb.insertAdjacentHTML('beforeend',
+     `<tr class="run"><td><span class="dot"></span>${p.pid}</td><td>${p.etime}</td><td>${p.cmd}</td>`+
+     `<td><button class="kill" onclick="kill('${p.pid}')">kill</button></td></tr>`);
+  }
+  document.getElementById('upd').textContent=new Date().toLocaleTimeString();
+}
+async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>

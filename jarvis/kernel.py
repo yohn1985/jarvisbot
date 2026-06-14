@@ -12,11 +12,15 @@ sys.path.insert(0, __file__.rsplit("/jarvis/", 1)[0])
 from jarvis.config import load
 
 def perceive(cfg) -> dict:
-    # TODO(real): read alerts, findings, WIPs, ledger, service health — bounded,
-    # by area, delta-since-watermark, summarize-then-discard. Stubbed for now.
-    return {"active_incident": None, "unfinished_wip": None,
-            "self_caused_regression": None, "needs_human_backlog": [],
-            "stalest_area": "telephony/whatsapp"}
+    # Real perception lives in jarvis/perceive.py (bounded, source-degrades-safe).
+    # Falls back to an empty world if that module isn't present yet.
+    try:
+        from jarvis.perceive import perceive as _real
+        return _real(cfg)
+    except Exception:
+        return {"active_incident": None, "unfinished_wip": None,
+                "self_caused_regression": None, "needs_human_backlog": [],
+                "stalest_area": "telephony/whatsapp"}
 
 def orient(cfg, world) -> str:
     # Rebuild "who am I" from memory. Stub: identity from config.
@@ -53,7 +57,15 @@ def tick(cfg) -> dict:
     mode = cfg["identity"].get("mode", "shadow")
     decision = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
                 "who": who, "rung": rung, "action": action, "mode": mode,
-                "would_execute": mode != "shadow"}
+                "would_execute": mode != "shadow",
+                "backlog": world.get("_backlog_count", 0)}
+    # record the tick so the dashboard can show it (best-effort)
+    try:
+        from jarvis.runtime import record
+        record(mode=f"tick/{rung}", target=action[:60], pool="kernel",
+               status="would" if mode == "shadow" else "ok")
+    except Exception:
+        pass
     return decision
 
 def main():
