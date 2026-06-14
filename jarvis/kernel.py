@@ -89,13 +89,8 @@ def _explore(cfg, decision):
     def run(args):
         subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=300, cwd=str(root))
 
-    def note(text):
-        try:
-            from jarvis import messaging
-            messaging.post_note(text, conv="activity", title="Activity")
-        except Exception:
-            pass
-
+    # Routine curiosity is SILENT — it shows in the RUNS feed (decision['worker']); chat is reserved
+    # for things the owner should see (suggestions, questions, problems) so it isn't spammed.
     try:
         open_qs = sum(1 for x in json.loads((root / "workspace" / "knowledge" / "questions.json").read_text())
                       if not x.get("answered"))
@@ -106,7 +101,6 @@ def _explore(cfg, decision):
         try:
             run(["--answer-one"])
             decision["worker"] = "curiosity: answered 1 question"
-            note("I looked into one of my open questions and wrote down what I learned — see KNOWLEDGE.")
         except Exception as e:
             decision["worker"] = f"(answer failed: {str(e)[:50]})"
         return
@@ -123,7 +117,6 @@ def _explore(cfg, decision):
             marker.parent.mkdir(exist_ok=True)
             marker.write_text(json.dumps({"ts": _t.time()}))
             decision["worker"] = "curiosity: explored + queued new questions"
-            note("I explored my environment, refreshed my notes, and jotted new questions — see KNOWLEDGE.")
         except Exception as e:
             decision["worker"] = f"(explore failed: {str(e)[:50]})"
         return

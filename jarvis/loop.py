@@ -53,6 +53,11 @@ def run(once: bool = False):
     print(f"[jarvis] working memory: {wm.backend}")
     while not stop["v"]:
         cfg = load()                        # live config reload each wake
+        try:                                # self-monitor FIRST (pure Python) — heal even if AI is down
+            from jarvis import watchdog
+            watchdog.watch(cfg)
+        except Exception:
+            pass
         if tg and tg.enabled:               # ingest owner replies from Telegram into the chat
             try:
                 from jarvis import messaging
