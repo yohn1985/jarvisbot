@@ -10,7 +10,7 @@ configured brain. Network-device discovery + persisting into the knowledge table
     python skill.py [--print]
 """
 from __future__ import annotations
-import argparse, concurrent.futures, ipaddress, platform, socket, subprocess, sys, time
+import argparse, concurrent.futures, ipaddress, json, platform, re, socket, subprocess, sys, time, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,12 +112,98 @@ def scan_network(max_hosts=256):
     return found
 
 
-def write_index(out_dir: Path):
-    """Regenerate INDEX.md linking to every discovery doc — Jarvis's own table of contents."""
-    docs = sorted((p for p in out_dir.glob("*.md") if p.name != "INDEX.md"), reverse=True)
-    lines = ["# Jarvis Knowledge — Discovery Index", f"_updated {time.strftime('%Y-%m-%d %H:%M:%S')}_", ""]
-    lines += [f"- [{p.stem}]({p.name})" for p in docs] or ["_(nothing discovered yet)_"]
-    (out_dir / "INDEX.md").write_text("\n".join(lines) + "\n")
+DISC_DIR = ROOT / "workspace" / "discovery"
+KNOW_DIR = ROOT / "workspace" / "knowledge"
+Q_FILE = KNOW_DIR / "questions.json"
+
+
+def _load_q():
+    try:
+        return json.loads(Q_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _save_q(q):
+    KNOW_DIR.mkdir(parents=True, exist_ok=True)
+    Q_FILE.write_text(json.dumps(q, indent=2))
+
+
+def _slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:50] or "q"
+
+
+def extract_questions(doc: str):
+    """Pull the 'open questions / worth investigating' list items out of a discovery doc."""
+    qs, grab = [], False
+    for line in doc.splitlines():
+        if line.lstrip().startswith("#"):
+            h = line.lower()
+            grab = ("open question" in h or "worth investigating" in h or "investigate" in h)
+            continue
+        if grab:
+            m = re.match(r"^\s*(?:[-*]|\d+\.)\s+(.*)", line)
+            if m:
+                q = re.sub(r"\*\*|`", "", m.group(1)).strip()
+                if len(q) > 8:
+                    qs.append(q)
+    return qs
+
+
+def add_questions(qs):
+    queue = _load_q()
+    have = {(x.get("q") or "").lower() for x in queue}
+    for q in qs:
+        if q.lower() not in have:
+            queue.append({"id": uuid.uuid4().hex[:8], "q": q, "answered": False,
+                          "answer": None, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
+            have.add(q.lower())
+    _save_q(queue)
+
+
+def _known_context(limit=9000):
+    docs = sorted((p for p in DISC_DIR.glob("*.md") if p.name != "INDEX.md"), reverse=True) if DISC_DIR.exists() else []
+    return "".join(f"\n\n=== {p.name} ===\n{p.read_text()}" for p in docs[:3])[:limit]
+
+
+def answer_one(llm):
+    """Take the oldest open question and answer it from accumulated knowledge — Jarvis building
+    understanding one question at a time. Returns (question, answer) or None."""
+    queue = _load_q()
+    nxt = next((x for x in queue if not x.get("answered")), None)
+    if not nxt:
+        return None
+    prompt = ("You are building your own understanding of your environment. Using your existing notes "
+              "below, investigate and answer this question as specifically as you can. If you truly "
+              "cannot answer from what's known, state exactly what data you'd need to find out.\n\n"
+              f"QUESTION: {nxt['q']}\n\nYOUR NOTES:\n{_known_context()}")
+    ans = llm.run("orchestrator", prompt, timeout=180).strip()
+    KNOW_DIR.mkdir(parents=True, exist_ok=True)
+    note = KNOW_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(nxt['q'])}.md"
+    note.write_text(f"# Q: {nxt['q']}\n_answered {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{ans}\n")
+    nxt["answered"], nxt["answer"] = True, ans[:400]
+    _save_q(queue)
+    write_index()
+    return nxt["q"], ans
+
+
+def write_index():
+    """INDEX.md: open questions Jarvis is exploring + discovery docs + answered notes."""
+    queue = _load_q()
+    open_qs = [x for x in queue if not x.get("answered")]
+    docs = sorted((p for p in DISC_DIR.glob("*.md") if p.name != "INDEX.md"), reverse=True) if DISC_DIR.exists() else []
+    notes = sorted(KNOW_DIR.glob("*.md"), reverse=True) if KNOW_DIR.exists() else []
+    lines = ["# Jarvis Knowledge — Index", f"_updated {time.strftime('%Y-%m-%d %H:%M:%S')}_", ""]
+    if open_qs:
+        lines.append("## Open questions I'm still exploring")
+        lines += [f"- {x['q']}" for x in open_qs[:15]] + [""]
+    lines.append("## Environment discovery")
+    lines += ([f"- [{p.stem}]({p.name})" for p in docs] or ["_none yet_"])
+    if notes:
+        lines += ["", "## What I've learned (answered)"]
+        lines += [f"- [{p.stem}]({p.name})" for p in notes[:25]]
+    DISC_DIR.mkdir(parents=True, exist_ok=True)
+    (DISC_DIR / "INDEX.md").write_text("\n".join(lines) + "\n")
 
 
 def organize(llm, facts: dict) -> str:
@@ -138,11 +224,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--print", action="store_true", help="also print the document")
     ap.add_argument("--network", action="store_true", help="also sweep the local subnet for devices/ports")
+    ap.add_argument("--answer-one", action="store_true", help="answer one open question from the queue")
     a = ap.parse_args()
     cfg = load()
     llm = build_llm(cfg)
     if not llm:
         sys.exit("discover: no brain configured (set up an AI brain first)")
+
+    if a.answer_one:                       # learning mode: answer one open question, keep building
+        res = answer_one(llm)
+        print(f"[discover] answered: {res[0]}" if res else "[discover] no open questions")
+        return
 
     print("[discover] scanning host...", file=sys.stderr)
     facts = scan_host()
@@ -161,8 +253,9 @@ def main():
     host = facts.get("hostname", "host")
     path = out_dir / f"{host}-{time.strftime('%Y%m%d-%H%M%S')}.md"
     path.write_text(f"# Discovery: {host}\n_generated {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{doc}\n")
-    write_index(out_dir)
-    print(f"[discover] wrote {path} (+ INDEX.md)")
+    add_questions(extract_questions(doc))   # queue the doc's open questions for future cycles
+    write_index()
+    print(f"[discover] wrote {path} (+ INDEX.md, queued questions)")
     if a.print:
         print("\n" + doc)
 

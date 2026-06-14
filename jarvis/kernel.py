@@ -76,37 +76,58 @@ def tick(cfg) -> dict:
     return decision
 
 def _explore(cfg, decision):
-    """Autonomous curiosity: periodically (re)discover + organize the environment, then say so.
-    Discovery is read-only (investigate class), so this runs even in shadow. Staleness-gated via
-    state/explore.json so it doesn't re-scan every wake."""
+    """Autonomous curiosity CYCLE: if there are open questions, answer ONE this cycle (build
+    understanding); otherwise (re)discover when the picture is stale, which queues fresh questions.
+    So it discovers -> wonders -> answers -> keeps building. Read-only, so it runs even in shadow."""
     import json, subprocess, time as _t
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent
-    marker = root / "state" / "explore.json"
+    py = root / ".venv" / "bin" / "python"
+    py = str(py) if py.exists() else "python3"
+    skill = str(root / "skills" / "discover" / "skill.py")
+
+    def run(args):
+        subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=300, cwd=str(root))
+
+    def note(text):
+        try:
+            from jarvis import messaging
+            messaging.post_note(text, conv="activity", title="Activity")
+        except Exception:
+            pass
+
+    try:
+        open_qs = sum(1 for x in json.loads((root / "workspace" / "knowledge" / "questions.json").read_text())
+                      if not x.get("answered"))
+    except Exception:
+        open_qs = 0
+
+    if open_qs > 0:                       # learning: answer one open question this cycle
+        try:
+            run(["--answer-one"])
+            decision["worker"] = "curiosity: answered 1 question"
+            note("I looked into one of my open questions and wrote down what I learned — see KNOWLEDGE.")
+        except Exception as e:
+            decision["worker"] = f"(answer failed: {str(e)[:50]})"
+        return
+
+    marker = root / "state" / "explore.json"            # no open questions -> rediscover if stale
     interval = int((cfg.get("explore", {}) or {}).get("interval_seconds", 21600))   # default 6h
     try:
         last = json.loads(marker.read_text()).get("ts", 0)
     except Exception:
         last = 0
     if _t.time() - last < interval:
-        decision["thought"] = (decision.get("thought", "") + " (explored recently — skipping)").strip()
+        decision["thought"] = (decision.get("thought", "") + " (all caught up — nothing new to explore)").strip()
         return
-    py = root / ".venv" / "bin" / "python"
-    py = str(py) if py.exists() else "python3"
     try:
-        subprocess.run([py, str(root / "skills" / "discover" / "skill.py"), "--network"],
-                       capture_output=True, text=True, timeout=300, cwd=str(root))
+        run(["--network"])
         marker.parent.mkdir(exist_ok=True)
         marker.write_text(json.dumps({"ts": _t.time()}))
-        decision["worker"] = "discover(--network) [ran]"
-        try:
-            from jarvis import messaging
-            messaging.post_note("I explored my environment and refreshed my notes — see the KNOWLEDGE tab.",
-                                conv="activity", title="Activity")
-        except Exception:
-            pass
+        decision["worker"] = "curiosity: explored + queued new questions"
+        note("I explored my environment, refreshed my notes, and jotted new questions — see KNOWLEDGE.")
     except Exception as e:
-        decision["worker"] = f"(explore failed: {str(e)[:60]})"
+        decision["worker"] = f"(explore failed: {str(e)[:50]})"
 
 
 def act(cfg, decision, world):

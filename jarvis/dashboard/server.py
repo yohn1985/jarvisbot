@@ -74,19 +74,23 @@ def _procs():
 
 
 def _discovery():
-    """Discovery documents Jarvis has written about its world (newest first)."""
-    d = ROOT / "workspace" / "discovery"
-    if not d.exists():
-        return []
-    paths = sorted(d.glob("*.md"), reverse=True)
+    """What Jarvis has written about its world: discovery docs + answered-knowledge notes (INDEX first)."""
+    paths = []
+    for d in (ROOT / "workspace" / "discovery", ROOT / "workspace" / "knowledge"):
+        if d.exists():
+            paths += [p for p in d.glob("*.md")]
+    paths = sorted(paths, key=lambda p: p.name, reverse=True)
     paths = [p for p in paths if p.name == "INDEX.md"] + [p for p in paths if p.name != "INDEX.md"]
-    out = []
+    out, seen = [], set()
     for p in paths:
+        if p.name in seen:
+            continue
+        seen.add(p.name)
         try:
             out.append({"name": p.name, "content": p.read_text()})
         except Exception:
             pass
-    return out[:25]
+    return out[:40]
 
 
 def _env_context(limit=4000):
