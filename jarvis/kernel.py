@@ -75,6 +75,37 @@ def tick(cfg) -> dict:
         pass
     return decision
 
+def _main_brain_is_frontier(cfg):
+    """Is the MAIN reasoning brain (orchestrator role) a frontier-grade backend (claude/codex)?
+    Local/agent-tier models (ollama) are fine for spawned agents, but not Jarvis's best thinking."""
+    llm = cfg.get("llm", {}) or {}
+    backend = ((llm.get("routing", {}) or {}).get("orchestrator", "")).split(":", 1)[0]
+    return backend in set(llm.get("frontier_backends", ["claude", "codex"]))
+
+
+def _maybe_ask_upgrade(cfg):
+    """Jarvis's desire to think better: if its main brain isn't frontier-grade, ask the owner ONCE
+    to add a stronger one (keeping the cheap model for spawned agents)."""
+    if _main_brain_is_frontier(cfg):
+        return
+    from pathlib import Path
+    marker = Path(__file__).resolve().parent.parent / "state" / "brain_upgrade.json"
+    if marker.exists():
+        return
+    try:
+        from jarvis import messaging
+        messaging.post_note(
+            "Heads up: my MAIN reasoning runs on a local/agent-tier model right now — great for the "
+            "grunt work my sub-agents do, but I'd think noticeably better with a frontier model. If "
+            "you have a Claude (Max/Pro) or ChatGPT/Codex subscription, add it as my main brain "
+            "(`claude setup-token` or `codex login`) and I'll reason with it while keeping the cheap "
+            "model for spawned agents.", conv="suggestions", title="Suggestions")
+        marker.parent.mkdir(exist_ok=True)
+        marker.write_text("asked")
+    except Exception:
+        pass
+
+
 def _explore(cfg, decision):
     """Autonomous curiosity CYCLE: if there are open questions, answer ONE this cycle (build
     understanding); otherwise (re)discover when the picture is stale, which queues fresh questions.
@@ -127,6 +158,7 @@ def _explore(cfg, decision):
         decision["worker"] = "curiosity: reviewed knowledge / proposed work"
     except Exception as e:
         decision["worker"] = f"(suggest failed: {str(e)[:50]})"
+    _maybe_ask_upgrade(cfg)             # desire a better main brain (asks once if agent-tier)
 
 
 def act(cfg, decision, world):
