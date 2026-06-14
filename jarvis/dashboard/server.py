@@ -190,11 +190,14 @@ def _chat_reply(conv):
         base = (persona.system(cfg) + " You're chatting with the owner in your dashboard."
                 + (f"\n\nWhat you've discovered about your environment:\n{env}\n" if env else "")
                 + f"\nConversation so far:\n{transcript}\n")
-        # Auto web-use: let the brain ask to browse when it needs current info it might not have.
+        # Auto web-use: prefer what Jarvis already knows; only browse for genuinely EXTERNAL facts.
         out = llm.run("orchestrator", base +
-                      "\nReply to the latest owner message. If answering accurately needs CURRENT or "
-                      "web info you may not have, reply with EXACTLY 'SEARCH: <query>' and nothing else. "
-                      f"Otherwise answer concisely.\n\n{name}:", timeout=120).strip()
+                      "\nAnswer the latest owner message. For ANYTHING about THIS machine, network, or "
+                      "setup, answer from the environment info above — do NOT web-search it. ONLY if the "
+                      "answer truly depends on EXTERNAL current-world facts you don't know (software "
+                      "releases, prices, news, third-party docs) AND aren't in the environment info, "
+                      f"reply with EXACTLY 'SEARCH: <query>'. Otherwise answer directly.\n\n{name}:",
+                      timeout=120).strip()
         used_web = False
         if out.upper().startswith("SEARCH:"):
             query = out.split(":", 1)[1].strip()
