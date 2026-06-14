@@ -42,10 +42,18 @@ def _config():
     return {"source": None, "config": {}}
 
 
-def _messages():
+def _messages(conv=None):
     try:
         from jarvis import messaging
-        return messaging.recent(100)
+        return messaging.messages(conv)
+    except Exception:
+        return []
+
+
+def _conversations():
+    try:
+        from jarvis import messaging
+        return messaging.conversations()
     except Exception:
         return []
 
@@ -87,8 +95,11 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_config()))
         if u.path == "/api/procs":
             return self._send(200, json.dumps(_procs()))
+        if u.path == "/api/conversations":
+            return self._send(200, json.dumps(_conversations()))
         if u.path == "/api/messages":
-            return self._send(200, json.dumps(_messages()))
+            conv = (parse_qs(u.query).get("conv") or [None])[0]
+            return self._send(200, json.dumps(_messages(conv)))
         if u.path == "/api/kill":
             pid = (parse_qs(u.query).get("pid") or [""])[0]
             try:
@@ -111,7 +122,7 @@ class H(BaseHTTPRequestHandler):
                 ok = messaging.answer(body.get("id", ""), body.get("text", ""))
                 return self._send(200 if ok else 400, json.dumps({"ok": ok}))
             if u.path == "/api/say":
-                messaging.say(body.get("text", ""))
+                messaging.say(body.get("text", ""), conv=body.get("conv", "general"))
                 return self._send(200, json.dumps({"ok": True}))
         except Exception as e:
             return self._send(500, json.dumps({"ok": False, "error": str(e)}))

@@ -33,7 +33,19 @@
   .empty{ color:var(--dim); padding:18px 10px; }
   .refresh{ background:none; border:1px solid var(--line); color:var(--dim); padding:3px 10px; border-radius:3px; cursor:pointer; }
   .badge{ background:var(--red); color:#fff; border-radius:9px; padding:0 6px; font-size:10px; margin-left:4px; }
-  #chatlog{ display:flex; flex-direction:column; gap:10px; max-width:780px; }
+  [hidden]{ display:none !important; }
+  main{ height:calc(100vh - 96px); padding:0; }
+  #chat{ display:flex; flex-direction:row; height:100%; }
+  .convs{ width:240px; min-width:240px; border-right:1px solid var(--line); display:flex; flex-direction:column; padding:12px 10px; gap:3px; overflow-y:auto; }
+  .newchat{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:10px; letter-spacing:1px; }
+  .conv-h{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:8px 8px 4px; }
+  .convitem{ padding:8px 10px; border-radius:6px; cursor:pointer; color:var(--dim); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .convitem:hover{ background:#0f140e; } .convitem.active{ background:#10241a; color:var(--txt); }
+  .convitem .t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .convmain{ flex:1; display:flex; flex-direction:column; min-width:0; padding:14px 18px; }
+  .convtitle{ color:var(--grntxt); font-size:12px; letter-spacing:1px; padding-bottom:10px; border-bottom:1px solid var(--line); margin-bottom:12px; }
+  #chatlog{ flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:4px 8px 4px 0; }
+  #chatlog::-webkit-scrollbar{ width:8px; } #chatlog::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
   .msg{ padding:9px 12px; border-radius:7px; max-width:78%; white-space:pre-wrap; }
   .msg.jarvis{ background:var(--panel); border:1px solid var(--line); align-self:flex-start; }
   .msg.owner{ background:#10241a; border:1px solid #1d3a2a; align-self:flex-end; }
@@ -43,8 +55,9 @@
   .ansrow{ display:flex; gap:6px; margin-top:8px; }
   .ansrow input{ flex:1; }
   input{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:7px 10px; border-radius:5px; font:inherit; }
-  .composer{ display:flex; gap:6px; max-width:780px; margin-top:14px; }
+  .composer{ display:flex; gap:8px; padding:12px 0 4px; margin-top:8px; border-top:1px solid var(--line); }
   .composer input{ flex:1; }
+  .msg{ font-size:13px; }
   .send,.ansbtn{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:6px 14px; border-radius:5px; cursor:pointer; }
 </style>
 </head>
@@ -52,13 +65,13 @@
 <header>
   <div class="title">● JARVIS</div>
   <div class="meta"><span id="procs">0 procs</span> · mode <span id="mode">—</span> · updated <span id="upd">—</span>
-     <button class="refresh" onclick="load()">refresh</button></div>
+     <button type="button" class="refresh" onclick="load()">refresh</button></div>
 </header>
 <nav>
-  <button id="tab-runs" class="active" onclick="show('runs')">RUNS</button>
-  <button id="tab-chat" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
-  <button id="tab-config" onclick="show('config')">CONFIG</button>
-  <button id="tab-procs" onclick="show('procview')">PROCESSES</button>
+  <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
+  <button type="button" id="tab-runs" onclick="show('runs')">RUNS</button>
+  <button type="button" id="tab-config" onclick="show('config')">CONFIG</button>
+  <button type="button" id="tab-procs" onclick="show('procview')">PROCESSES</button>
 </nav>
 <main>
   <section id="runs">
@@ -67,9 +80,17 @@
     <div id="runs-empty" class="empty" hidden>No runs yet — run <code>./install.sh breathe</code>.</div>
   </section>
   <section id="chat" hidden>
-    <div id="chatlog"></div>
-    <div class="composer"><input id="sayinput" placeholder="message Jarvis…" onkeydown="if(event.key==='Enter')say()"/>
-      <button type="button" class="send" onclick="say()">send</button></div>
+    <aside class="convs">
+      <button type="button" class="newchat" onclick="newChat()">+ New chat</button>
+      <div class="conv-h">CONVERSATIONS</div>
+      <div id="convlist"></div>
+    </aside>
+    <div class="convmain">
+      <div id="convtitle" class="convtitle">—</div>
+      <div id="chatlog"></div>
+      <div class="composer"><input id="sayinput" placeholder="message Jarvis…" onkeydown="if(event.key==='Enter')say()"/>
+        <button type="button" class="send" onclick="say()">send</button></div>
+    </div>
   </section>
   <section id="config" hidden></section>
   <section id="procview" hidden>
@@ -87,9 +108,20 @@ function show(id){
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 async function load(){
-  const [runs,cfg,procs,msgs] = await Promise.all([
+  const [runs,cfg,procs,convs] = await Promise.all([
     fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
-    fetch('/api/procs').then(r=>r.json()), fetch('/api/messages').then(r=>r.json())]);
+    fetch('/api/procs').then(r=>r.json()), fetch('/api/conversations').then(r=>r.json())]);
+  if(!activeConv && convs.length) activeConv = convs[0].id;
+  const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
+  // conversations sidebar
+  const clist=document.getElementById('convlist'); clist.innerHTML='';
+  for(const c of convs){
+    const act = c.id===activeConv ? ' active':'';
+    const badge = c.open_q? `<span class="badge">${c.open_q}</span>`:'';
+    clist.insertAdjacentHTML('beforeend',
+      `<div class="convitem${act}" onclick="selectConv('${c.id}')"><span class="t">${esc(c.title)}</span>${badge}</div>`);
+  }
+  document.getElementById('convtitle').textContent = activeConv ? (convs.find(c=>c.id===activeConv)?.title||activeConv) : 'New conversation';
   // runs
   const rb=document.getElementById('runs-body'); rb.innerHTML='';
   document.getElementById('runs-empty').hidden = runs.length>0;
@@ -123,7 +155,9 @@ async function load(){
      `<td><button class="kill" onclick="kill('${p.pid}')">kill</button></td></tr>`);
   }
   // chat
-  const cl=document.getElementById('chatlog'); cl.innerHTML='';
+  const cl=document.getElementById('chatlog');
+  const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 80;
+  cl.innerHTML='';
   let openQ=0;
   for(const m of msgs){
     const isJ = m.from==='jarvis'; const isQ = m.kind==='question';
@@ -136,8 +170,10 @@ async function load(){
     } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
     html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
   }
+  const totalOpen = convs.reduce((s,c)=>s+(c.open_q||0),0);
   const badge=document.getElementById('qbadge');
-  badge.hidden = openQ===0; badge.textContent = openQ;
+  badge.hidden = totalOpen===0; badge.textContent = totalOpen;
+  if(nearBottom) cl.scrollTop = cl.scrollHeight;
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
@@ -145,11 +181,14 @@ async function answerQ(id){
   const v=document.getElementById('a-'+id).value.trim(); if(!v) return;
   await fetch('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,text:v})}); load();
 }
+function selectConv(id){ activeConv=id; load(); }
+function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
 async function say(){
   const el=document.getElementById('sayinput'); const v=el.value.trim(); if(!v) return; el.value='';
-  await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})}); load();
+  await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v,conv:activeConv||'general'})}); load();
 }
-load(); setInterval(load, 4000);
+let activeConv=null;
+show('chat'); load(); setInterval(load, 4000);
 </script>
 </body>
 </html>

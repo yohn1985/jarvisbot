@@ -46,6 +46,13 @@ worksource:
   kind: folder               # folder | gitea | github
   path: ./tasks
 
+# Jarvis's hands. Each worker = a command template ({target}) + the action_class it needs.
+# Generic no-op examples here; override in config.yaml with your real tools (deep-fix, fixer).
+# Jarvis only EXECUTES when mode!=shadow AND the action_class is 'allow'; else it records intent.
+workers:
+  deep_fix: {cmd: ["echo","[deep-fix] would investigate {target}"], action_class: propose}
+  fixer:    {cmd: ["echo","[fixer] would open a PR for {target}"], action_class: fix_pr}
+
 # Wake triggers
 wake:
   heartbeat_seconds: 1800    # floor so it never sleeps forever

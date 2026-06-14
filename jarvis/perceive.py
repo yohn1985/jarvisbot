@@ -73,11 +73,18 @@ def _gitea_open(ws: dict) -> list[str]:
 def perceive(cfg: dict) -> dict:
     led = ledger_signals(cfg)
     backlog = worksource(cfg)
-    top_recurring = led["recurring"][0] if led["recurring"] else None
+    recurring = led["recurring"]
+    # Categorize recurring ledger signatures by their LABEL. A code-defect that keeps recurring is
+    # a real regression to fix; a tooling-gap / process / friction lesson is SELF-IMPROVEMENT, not
+    # something Jarvis "caused". (Jarvis's own question caught the earlier over-broad mapping.)
+    code_defects = [r for r in recurring if r.get("label") == "code-defect"]
+    improvements = [r for r in recurring if r.get("label") in
+                    ("tooling-gap", "process", "operational-friction", "infra")]
     return {
         "active_incident": None,                       # TODO: alertmanager adapter
         "unfinished_wip": None,                        # TODO: WIP index
-        "self_caused_regression": (top_recurring.get("sig") if top_recurring else None),
+        "self_caused_regression": (code_defects[0].get("sig") if code_defects else None),
+        "self_maintenance": (improvements[0].get("sig") if improvements else None),
         "needs_human_backlog": backlog,
         "stalest_area": "telephony/whatsapp",          # TODO: knowledge_map staleness
         "_ledger": led,

@@ -164,6 +164,13 @@ worksource:
   kind: folder               # folder | gitea | github
   path: ./tasks
 
+# Jarvis's hands. Each worker = a command template ({target}) + the action_class it needs.
+# Generic no-op examples here; override in config.yaml with your real tools (deep-fix, fixer).
+# Jarvis only EXECUTES when mode!=shadow AND the action_class is 'allow'; else it records intent.
+workers:
+  deep_fix: {cmd: ["echo","[deep-fix] would investigate {target}"], action_class: propose}
+  fixer:    {cmd: ["echo","[fixer] would open a PR for {target}"], action_class: fix_pr}
+
 # Wake triggers
 wake:
   heartbeat_seconds: 1800    # floor so it never sleeps forever
@@ -244,8 +251,9 @@ __version__ = "0.0.1"
 EOF
 
   gen jarvis/config.py <<'EOF'
-"""Config loader: config.yaml (non-secret) + .env (secrets). Degrades gracefully."""
-import os
+"""Config loader: DEFAULTS <- config.example.yaml (documented base) <- config.yaml (your
+deltas) <- .env (secrets). Deep-merged, so your config.yaml stays tiny. Degrades gracefully
+(runs on DEFAULTS alone if pyyaml is absent)."""
 from pathlib import Path
 
 DEFAULTS = {
@@ -258,18 +266,28 @@ DEFAULTS = {
                        "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
 }
 
+def _merge(base: dict, over: dict) -> dict:
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
 def load(root: str | None = None) -> dict:
     root = Path(root or Path(__file__).resolve().parent.parent)
     cfg = dict(DEFAULTS)
-    path = root / "config.yaml"
-    if not path.exists():
-        path = root / "config.example.yaml"
     try:
         import yaml  # optional; shadow mode runs without it
-        if path.exists():
-            cfg.update(yaml.safe_load(path.read_text()) or {})
     except Exception:
-        pass
+        return cfg
+    for name in ("config.example.yaml", "config.yaml"):  # base, then your overrides
+        p = root / name
+        if p.exists():
+            try:
+                _merge(cfg, yaml.safe_load(p.read_text()) or {})
+            except Exception:
+                pass
     return cfg
 EOF
 
@@ -309,7 +327,7 @@ def decide(cfg, world) -> tuple[str, str]:
         "p1_unfinished_wip":         world.get("unfinished_wip"),
         "p2_self_caused_regression": world.get("self_caused_regression"),
         "p3_needs_human_backlog":    world.get("needs_human_backlog") or None,
-        "p4_self_maintenance":       None,
+        "p4_self_maintenance":       world.get("self_maintenance"),
         "p5_curiosity":              world.get("stalest_area"),
     }
     for rung in cfg["priorities"]:
@@ -323,6 +341,7 @@ def _action_for(rung, payload):
         "p1_unfinished_wip":         f"continue WIP: {payload}",
         "p2_self_caused_regression": f"fix my own regression: {payload}",
         "p3_needs_human_backlog":    f"take one needs-human issue and run deep-fix",
+        "p4_self_maintenance":       f"improve my own tooling/process: {payload}",
         "p5_curiosity":              f"explore stalest area: {payload}",
     }.get(rung, str(payload))
 
@@ -336,16 +355,43 @@ def tick(cfg) -> dict:
                 "would_execute": mode != "shadow",
                 "backlog": world.get("_backlog_count", 0)}
     think(cfg, decision, world)
+    if not decision.get("asked"):          # if we asked the owner, wait for an answer — don't act
+        act(cfg, decision, world)
     # record the tick so the dashboard can show it (best-effort)
     try:
         from jarvis.runtime import record
         record(mode=f"tick/{rung}", target=action[:60], pool="kernel",
                model=decision.get("model", "-"),
                status="would" if mode == "shadow" else "ok",
-               thought=decision.get("thought", ""), asked=decision.get("asked", ""))
+               thought=decision.get("thought", ""), asked=decision.get("asked", ""),
+               worker=decision.get("worker", ""))
     except Exception:
         pass
     return decision
+
+def act(cfg, decision, world):
+    """Route the decided rung to a worker — Jarvis's hands. The runner enforces propose-only:
+    it only executes when mode!=shadow AND the worker's action_class is 'allow'; otherwise it
+    records the INTENT. So this is always safe to call."""
+    rung = decision["rung"]
+    backlog = world.get("needs_human_backlog") or []
+    plan = {
+        "p3_needs_human_backlog":    ("deep_fix", backlog[0] if backlog else None),
+        "p2_self_caused_regression": ("deep_fix", world.get("self_caused_regression")),
+        "p1_unfinished_wip":         ("fixer", world.get("unfinished_wip")),
+    }.get(rung)
+    if not plan or not plan[1]:
+        return
+    name, target = plan
+    try:
+        from jarvis.workers.runner import run_worker
+        res = run_worker(cfg, name, target, mode=decision["mode"])
+        if res.get("ok"):
+            decision["worker"] = f"{name}({str(target)[:40]})" + (" [would]" if res.get("would") else " [running]")
+        else:
+            decision["worker"] = f"(worker {name} blocked: {res.get('reason')})"
+    except Exception as e:
+        decision["worker"] = f"(worker error: {str(e)[:60]})"
 
 def think(cfg, decision, world):
     """The 'mind' pass: reason about the decision via the LLM router; if the model can't

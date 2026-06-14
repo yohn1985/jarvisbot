@@ -1,5 +1,6 @@
-"""Config loader: config.yaml (non-secret) + .env (secrets). Degrades gracefully."""
-import os
+"""Config loader: DEFAULTS <- config.example.yaml (documented base) <- config.yaml (your
+deltas) <- .env (secrets). Deep-merged, so your config.yaml stays tiny. Degrades gracefully
+(runs on DEFAULTS alone if pyyaml is absent)."""
 from pathlib import Path
 
 DEFAULTS = {
@@ -12,16 +13,26 @@ DEFAULTS = {
                        "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
 }
 
+def _merge(base: dict, over: dict) -> dict:
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
 def load(root: str | None = None) -> dict:
     root = Path(root or Path(__file__).resolve().parent.parent)
     cfg = dict(DEFAULTS)
-    path = root / "config.yaml"
-    if not path.exists():
-        path = root / "config.example.yaml"
     try:
         import yaml  # optional; shadow mode runs without it
-        if path.exists():
-            cfg.update(yaml.safe_load(path.read_text()) or {})
     except Exception:
-        pass
+        return cfg
+    for name in ("config.example.yaml", "config.yaml"):  # base, then your overrides
+        p = root / name
+        if p.exists():
+            try:
+                _merge(cfg, yaml.safe_load(p.read_text()) or {})
+            except Exception:
+                pass
     return cfg
