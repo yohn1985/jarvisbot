@@ -1,0 +1,1 @@
+# deep-search needs only ripgrep (system) + the Jarvis LLM router. No pip deps.
