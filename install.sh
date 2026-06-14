@@ -779,8 +779,36 @@ doctor(){
 }
 
 # ---------------------------------------------------------------------------
+dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:8787"; }
+
+# Bring the dashboard up (stdlib only — works before any deps/brain exist) so the owner has a
+# place to watch Jarvis and answer its setup questions. Backgrounded + detached; the durable
+# systemd service is installed later via the approved plan.
+dashboard_up(){
+  mkdir -p "$ROOT/state"
+  if ss -ltn 2>/dev/null | grep -q ':8787 '; then log "dashboard already up"; return; fi
+  setsid nohup "$(pybin)" "$ROOT/jarvis/dashboard/server.py" --host 0.0.0.0 --port 8787 \
+    >"$ROOT/state/dashboard.log" 2>&1 </dev/null &
+  echo $! > "$ROOT/state/dashboard.pid"
+  sleep 1
+  if ss -ltn 2>/dev/null | grep -q ':8787 '; then log "dashboard started (pid $(cat "$ROOT/state/dashboard.pid"))"
+  else warn "dashboard may not have started — see $ROOT/state/dashboard.log"; fi
+}
+
+# The landing step: bring the cockpit up, run one no-AI preflight so the page shows what's
+# missing, then hand the owner the URL to continue setup from the dashboard.
+land(){
+  dashboard_up
+  "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.bootstrap import preflight;r=preflight.run(load());print('[jarvis] preflight: ready=%s asked=%s'%(r['ready'],r['asked']))" 2>/dev/null || true
+  echo
+  log "Jarvis is up. Continue in your browser:"
+  printf '\n    \033[36m%s\033[0m\n\n' "$(dash_url)"
+  log "Open that page to finish setup — approve installs and give Jarvis its AI brain."
+}
+
 case "${1:-scaffold}" in
-  scaffold) scaffold; echo; deps; echo; log "next: ./install.sh breathe   (watch a tick) | ./install.sh up (start stack)";;
+  scaffold) scaffold; echo; deps; echo; land;;
+  setup|land) land;;
   deps)     deps "${2:-}";;
   initdb)   initdb;;
   migrate)  migrate;;
