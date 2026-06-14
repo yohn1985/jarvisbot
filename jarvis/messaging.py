@@ -10,6 +10,29 @@ from pathlib import Path
 
 STATE = Path(__file__).resolve().parent.parent / "state"
 MSGS = STATE / "messages.jsonl"
+CONV_META = STATE / "conv_meta.json"   # per-conversation flags (archived) — never deletes messages
+
+
+def _meta() -> dict:
+    if CONV_META.exists():
+        try:
+            return json.loads(CONV_META.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_meta(m: dict) -> None:
+    STATE.mkdir(exist_ok=True)
+    CONV_META.write_text(json.dumps(m, indent=2))
+
+
+def archive(conv: str, archived: bool = True) -> None:
+    """Archive/unarchive a conversation — kept in storage (Jarvis still reads + auto-cleans it),
+    just hidden from the active sidebar."""
+    m = _meta()
+    m.setdefault(conv, {})["archived"] = bool(archived)
+    _save_meta(m)
 
 
 def _now():
@@ -47,11 +70,13 @@ def _conv_of(m: dict) -> str:
 
 
 def conversations() -> list[dict]:
-    """One entry per thread: id, title, last_ts, message count, open-question count."""
+    """One entry per thread: id, title, last_ts, count, open_q, archived."""
+    meta = _meta()
     convs: dict[str, dict] = {}
     for m in _all():
         c = _conv_of(m)
-        e = convs.setdefault(c, {"id": c, "title": c, "last_ts": m["ts"], "count": 0, "open_q": 0})
+        e = convs.setdefault(c, {"id": c, "title": c, "last_ts": m["ts"], "count": 0,
+                                 "open_q": 0, "archived": bool(meta.get(c, {}).get("archived"))})
         e["last_ts"] = m["ts"]
         e["count"] += 1
         if m.get("conv_title"):

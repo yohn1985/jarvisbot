@@ -43,7 +43,10 @@
   .convitem:hover{ background:#0f140e; } .convitem.active{ background:#10241a; color:var(--txt); }
   .convitem .t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .convmain{ flex:1; display:flex; flex-direction:column; min-width:0; padding:14px 24px; }
-  .convtitle, #chatlog, .composer{ width:100%; max-width:720px; margin-left:auto; margin-right:auto; }
+  .convtitle, #chatlog, .composer{ width:100%; max-width:880px; margin-left:auto; margin-right:auto; }
+  .convitem .ar{ color:var(--dim); border:none; background:none; cursor:pointer; opacity:0; font-size:13px; }
+  .convitem:hover .ar{ opacity:.7; } .convitem .ar:hover{ opacity:1; color:var(--amber); }
+  .archtoggle{ color:var(--dim); background:none; border:none; cursor:pointer; font-size:11px; letter-spacing:1px; padding:8px; text-align:left; }
   .convtitle{ color:var(--grntxt); font-size:12px; letter-spacing:1px; padding-bottom:10px; border-bottom:1px solid var(--line); margin-bottom:12px; }
   #chatlog{ flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:4px 8px 4px 0; }
   #chatlog::-webkit-scrollbar{ width:8px; } #chatlog::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
@@ -116,11 +119,18 @@ async function load(){
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
   // conversations sidebar
   const clist=document.getElementById('convlist'); clist.innerHTML='';
-  for(const c of convs){
-    const act = c.id===activeConv ? ' active':'';
-    const badge = c.open_q? `<span class="badge">${c.open_q}</span>`:'';
-    clist.insertAdjacentHTML('beforeend',
-      `<div class="convitem${act}" onclick="selectConv('${c.id}')"><span class="t">${esc(c.title)}</span>${badge}</div>`);
+  const active=convs.filter(c=>!c.archived), archived=convs.filter(c=>c.archived);
+  const item=(c,isArch)=>{
+    const act=c.id===activeConv?' active':'';
+    const badge=c.open_q?`<span class="badge">${c.open_q}</span>`:'';
+    const btn=isArch?`<button type="button" class="ar" title="unarchive" onclick="event.stopPropagation();archiveConv('${c.id}',false)">⤴</button>`
+                    :`<button type="button" class="ar" title="archive" onclick="event.stopPropagation();archiveConv('${c.id}',true)">×</button>`;
+    return `<div class="convitem${act}" onclick="selectConv('${c.id}')"><span class="t">${esc(c.title)}</span><span>${badge}${btn}</span></div>`;
+  };
+  for(const c of active) clist.insertAdjacentHTML('beforeend', item(c,false));
+  if(archived.length){
+    clist.insertAdjacentHTML('beforeend', `<button type="button" class="archtoggle" onclick="toggleArch()">${showArch?'▾':'▸'} ARCHIVED (${archived.length})</button>`);
+    if(showArch) for(const c of archived) clist.insertAdjacentHTML('beforeend', item(c,true));
   }
   document.getElementById('convtitle').textContent = activeConv ? (convs.find(c=>c.id===activeConv)?.title||activeConv) : 'New conversation';
   // runs
@@ -181,6 +191,13 @@ async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
 async function answerQ(id){
   const v=document.getElementById('a-'+id).value.trim(); if(!v) return;
   await fetch('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,text:v})}); load();
+}
+let showArch=false;
+function toggleArch(){ showArch=!showArch; load(); }
+async function archiveConv(id,val){
+  await fetch('/api/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:id,archived:val})});
+  if(activeConv===id && val) activeConv=null;
+  load();
 }
 function selectConv(id){ activeConv=id; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }

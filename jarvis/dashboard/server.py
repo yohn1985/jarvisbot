@@ -116,6 +116,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             body = {}
+        if u.path == "/api/alert":
+            # Alertmanager (or anyone) POSTs here to wake Jarvis immediately.
+            (ROOT / "state").mkdir(exist_ok=True)
+            (ROOT / "state" / "wake").touch()
+            return self._send(200, json.dumps({"ok": True, "woke": True}))
         try:
             from jarvis import messaging
             if u.path == "/api/answer":
@@ -123,6 +128,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200 if ok else 400, json.dumps({"ok": ok}))
             if u.path == "/api/say":
                 messaging.say(body.get("text", ""), conv=body.get("conv", "general"))
+                return self._send(200, json.dumps({"ok": True}))
+            if u.path == "/api/archive":
+                messaging.archive(body.get("conv", ""), bool(body.get("archived", True)))
                 return self._send(200, json.dumps({"ok": True}))
         except Exception as e:
             return self._send(500, json.dumps({"ok": False, "error": str(e)}))

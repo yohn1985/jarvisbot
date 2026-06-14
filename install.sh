@@ -178,13 +178,15 @@ wake:
   self_schedule: true        # it sets its own next-wake
 
 # The priority ladder the tick triages by (top non-empty rung wins).
+# Young Jarvis works on ITSELF and LEARNS first; it only takes on the production backlog (p3)
+# once it understands its world and has earned trust. Raise p3 up the ladder as it matures.
 priorities:
-  - p0_active_incident
-  - p1_unfinished_wip
-  - p2_self_caused_regression
-  - p3_needs_human_backlog
-  - p4_self_maintenance
-  - p5_curiosity
+  - p0_active_incident         # a fire is always first
+  - p1_unfinished_wip          # never abandon what I started
+  - p2_self_caused_regression  # if I broke something, fix it
+  - p4_self_maintenance        # improve my own tooling / process
+  - p5_curiosity               # learn about my world
+  - p3_needs_human_backlog     # only then work on the system
 EOF
 
   gen requirements.txt <<'EOF'
@@ -258,9 +260,9 @@ from pathlib import Path
 
 DEFAULTS = {
     "identity": {"name": "Jarvis", "mode": "shadow"},
-    "priorities": [
+    "priorities": [   # young Jarvis: self + learning first; production backlog (p3) last
         "p0_active_incident", "p1_unfinished_wip", "p2_self_caused_regression",
-        "p3_needs_human_backlog", "p4_self_maintenance", "p5_curiosity",
+        "p4_self_maintenance", "p5_curiosity", "p3_needs_human_backlog",
     ],
     "action_classes": {"investigate": "allow", "propose": "allow",
                        "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
@@ -588,6 +590,31 @@ EOF
 # Drop task files here for the 'folder' worksource adapter.
 EOF
 
+  gen deploy/jarvis.service <<EOF
+[Unit]
+Description=Jarvis wake loop
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+ExecStart=$ROOT/install.sh run
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+EOF
+  gen deploy/jarvis-dashboard.service <<EOF
+[Unit]
+Description=Jarvis dashboard
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+ExecStart=$ROOT/install.sh dashboard --host 0.0.0.0 --port 8787
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
   scaffold_skills
   log "scaffold complete."
 }
@@ -724,6 +751,8 @@ case "${1:-scaffold}" in
   up)       up;;
   down)     down;;
   breathe)  breathe;;
+  run)      shift; "$(pybin)" "$ROOT/jarvis/loop.py" "$@";;     # persistent wake loop
+  wake)     mkdir -p "$ROOT/state"; touch "$ROOT/state/wake"; log "wake marker set";;
   skill)    shift; skill_cmd "$@";;
   dashboard) shift; "$(pybin)" "$ROOT/jarvis/dashboard/server.py" "$@";;
   doctor)   doctor;;

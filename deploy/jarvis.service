@@ -1,0 +1,11 @@
+[Unit]
+Description=Jarvis wake loop
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/home/yohn/projects/jarvis
+ExecStart=/home/yohn/projects/jarvis/install.sh run
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

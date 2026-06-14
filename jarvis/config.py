@@ -5,9 +5,9 @@ from pathlib import Path
 
 DEFAULTS = {
     "identity": {"name": "Jarvis", "mode": "shadow"},
-    "priorities": [
+    "priorities": [   # young Jarvis: self + learning first; production backlog (p3) last
         "p0_active_incident", "p1_unfinished_wip", "p2_self_caused_regression",
-        "p3_needs_human_backlog", "p4_self_maintenance", "p5_curiosity",
+        "p4_self_maintenance", "p5_curiosity", "p3_needs_human_backlog",
     ],
     "action_classes": {"investigate": "allow", "propose": "allow",
                        "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
