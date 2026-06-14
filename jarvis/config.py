@@ -24,6 +24,11 @@ def _merge(base: dict, over: dict) -> dict:
 def load(root: str | None = None) -> dict:
     import os
     root = Path(root or Path(__file__).resolve().parent.parent)
+    try:                       # load .env secrets (e.g. OLLAMA_API_KEY) into the environment
+        from jarvis.bootstrap import secrets
+        secrets.load_env()
+    except Exception:
+        pass
     cfg = dict(DEFAULTS)
     try:
         import yaml  # optional; shadow mode runs without it

@@ -174,6 +174,26 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/approve":
             ids = body.get("ids")
             return self._send(200, json.dumps(_approve(ids)))
+        if u.path == "/api/verify-brain":
+            try:
+                from jarvis.config import load
+                from jarvis.bootstrap import preflight
+                ok, detail = preflight.recheck_brain(load())
+                return self._send(200, json.dumps({"ok": ok, "detail": detail}))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
+        if u.path == "/api/brain-key":
+            prov, key = (body.get("provider") or "").strip(), (body.get("key") or "").strip()
+            if not key:
+                return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
+            try:
+                from jarvis.bootstrap import secrets
+                env_name = {"ollama": "OLLAMA_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                            "openai": "OPENAI_API_KEY"}.get(prov, prov.upper() + "_API_KEY")
+                secrets.set_secret(env_name, key)
+                return self._send(200, json.dumps({"ok": True, "stored": env_name}))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
         try:
             from jarvis import messaging
             if u.path == "/api/answer":

@@ -122,11 +122,11 @@ def check_brain(cfg: dict):
 
 def _ask_brain(cfg: dict) -> str:
     if not find_ai_clis(cfg):
-        return ("I don't have an AI brain yet. Open the SETUP tab and approve the install — or "
-                "install a CLI and run `claude login` — so I can think.")
-    return ("My AI brain is installed but not logged in, so I still can't think. On this machine, "
-            "run `claude login` (or `codex login`) in a terminal — or paste an API key here and "
-            "I'll keep it in my local vault.")
+        return "I don't have an AI brain yet — open the Setup conversation and click Install."
+    return ("My AI brain is installed but not logged in, so I still can't think. Cheapest is a "
+            "subscription you already pay for: run `claude setup-token` (Claude) or `codex login` "
+            "(ChatGPT) on this machine, or paste an Ollama Cloud key — pick one in the Setup "
+            "conversation, then Re-check.")
 
 
 # (key, label, required, check_fn, ask_fn)
@@ -180,6 +180,15 @@ def _resolve(key: str, label: str, st: dict) -> bool:
     rec["resolved"] = True
     st[key] = rec
     return True
+
+
+def recheck_brain(cfg: dict):
+    """Force a fresh brain probe now (clears the cached verification) — used by the dashboard
+    'Re-check' button right after the owner logs in or pastes a key."""
+    st = _load_state()
+    st["brain"] = {}
+    _save_state(st)
+    return check_brain(cfg)
 
 
 def status(cfg: dict) -> dict:

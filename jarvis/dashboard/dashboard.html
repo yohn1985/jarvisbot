@@ -72,6 +72,13 @@
   .bigbtn{ background:var(--grn); color:#04140a; border:none; padding:12px 22px; border-radius:7px; cursor:pointer; font:inherit; font-weight:600; letter-spacing:1px; }
   .bigbtn:disabled{ opacity:.55; cursor:default; }
   .needyou{ margin-top:16px; border-top:1px solid var(--line); padding-top:12px; color:var(--amber); }
+  .setupcard, .welcome{ max-width:100%; }
+  .ascii{ color:var(--grntxt); font-size:11px; line-height:1.05; margin:0 0 8px; white-space:pre; overflow-x:auto; }
+  .brainbtns{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
+  .choice{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:8px 12px; border-radius:6px; cursor:pointer; font:inherit; }
+  .choice.on{ background:#10241a; border-color:var(--grn); }
+  .braindetail{ margin-top:10px; padding-top:8px; border-top:1px solid var(--line); }
+  .braindetail code{ background:#0c100c; padding:1px 5px; border-radius:3px; }
 </style>
 </head>
 <body>
@@ -81,14 +88,12 @@
      <button type="button" class="refresh" onclick="load()">refresh</button></div>
 </header>
 <nav>
-  <button type="button" id="tab-setup" onclick="show('setup')">SETUP <span id="setupbadge" class="badge" hidden></span></button>
   <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
   <button type="button" id="tab-runs" onclick="show('runs')">RUNS</button>
   <button type="button" id="tab-config" onclick="show('config')">CONFIG</button>
   <button type="button" id="tab-procs" onclick="show('procview')">PROCESSES</button>
 </nav>
 <main>
-  <section id="setup" hidden></section>
   <section id="runs">
     <table><thead><tr><th>TIME</th><th>MODE</th><th>POOL</th><th>MODEL</th><th>STATUS</th><th>DURATION</th><th>TARGET</th></tr></thead>
     <tbody id="runs-body"></tbody></table>
@@ -116,41 +121,57 @@
 </main>
 <script>
 function show(id){
-  for(const s of ['setup','runs','chat','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const s of ['runs','chat','config','procview']){ document.getElementById(s).hidden = (s!==id); }
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
-let booted=false;
-function renderSetup(s){
-  const el=document.getElementById('setup'), badge=document.getElementById('setupbadge'), tab=document.getElementById('tab-setup');
-  if(s.error){ el.innerHTML='<div class="card"><h3>SETUP</h3><div class="empty">'+esc(s.error)+'</div></div>'; return; }
-  if(s.complete){
-    badge.hidden=true; tab.hidden=true;                          // setup done -> the tab disappears
-    if(!document.getElementById('setup').hidden) show('chat');   // don't strand the user on a hidden tab
-    el.innerHTML='<div class="card"><h3>SETUP</h3><div class="setupdone">✓ Jarvis is set up and running.</div></div>';
-    return;
-  }
-  tab.hidden=false; badge.hidden=false; badge.textContent='!';
+let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='';
+const JARVIS_ART = [
+"     ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗",
+"     ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝",
+"     ██║███████║██████╔╝██║   ██║██║███████╗",
+"██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║",
+"╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║",
+" ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝"].join("\n");
+async function recheckBrain(){ await fetch('/api/verify-brain',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); load(); }
+function chooseBrain(p){ brainChoice=p; load(); }
+async function saveOllamaKey(){
+  const el=document.getElementById('ollamakey'); const k=(el?el.value:ollamaKeyDraft||'').trim();
+  if(!k) return;
+  await fetch('/api/brain-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:'ollama',key:k})});
+  ollamaKeyDraft=''; brainChoice=null; load();
+}
+function brainChooser(){
+  let h='<div style="margin:6px 0">Power my brain — cheapest is a subscription you already pay for:</div>'
+   +'<div class="brainbtns">'
+   +'<button type="button" class="choice'+(brainChoice==='claude'?' on':'')+'" onclick="chooseBrain(\'claude\')">Claude subscription</button>'
+   +'<button type="button" class="choice'+(brainChoice==='codex'?' on':'')+'" onclick="chooseBrain(\'codex\')">Codex subscription</button>'
+   +'<button type="button" class="choice'+(brainChoice==='ollama'?' on':'')+'" onclick="chooseBrain(\'ollama\')">Ollama Cloud key</button></div>';
+  if(brainChoice==='claude') h+='<div class="braindetail">In a terminal on this machine run <code>claude setup-token</code> (uses your Claude Max/Pro plan), then <button type="button" class="bigbtn" onclick="recheckBrain()">Re-check</button></div>';
+  else if(brainChoice==='codex') h+='<div class="braindetail">In a terminal on this machine run <code>codex login</code> (uses your ChatGPT plan), then <button type="button" class="bigbtn" onclick="recheckBrain()">Re-check</button></div>';
+  else if(brainChoice==='ollama') h+='<div class="braindetail">Paste your Ollama Cloud API key (subscription pricing):<div class="ansrow"><input id="ollamakey" type="password" placeholder="ollama cloud key…" oninput="ollamaKeyDraft=this.value" value="'+esc(ollamaKeyDraft)+'"/><button type="button" class="bigbtn" onclick="saveOllamaKey()">Save &amp; connect</button></div></div>';
+  return h;
+}
+function renderSetupCard(cl){
+  const s=setupState; if(!(activeConv==='setup' && s)) return;
+  cl.insertAdjacentHTML('beforeend','<div class="msg jarvis welcome"><pre class="ascii">'+JARVIS_ART+'</pre><div>Hi — I\'m Jarvis. Let\'s get me set up.</div></div>');
+  if(s.complete){ cl.insertAdjacentHTML('beforeend','<div class="msg jarvis"><div class="who">JARVIS · SETUP</div>✓ All set — I\'m running.</div>'); return; }
   const plan=s.plan||[], doable=plan.filter(a=>!a.blocked), blocked=plan.filter(a=>a.blocked), needs=s.needs_user||[];
-  let h='<div class="card"><h3>SET UP JARVIS</h3>';
+  let card='<div class="msg jarvis setupcard"><div class="who">JARVIS · SETUP</div>';
   if(doable.length){
-    h+='<p>Jarvis needs to set up '+doable.length+' thing'+(doable.length>1?'s':'')+' on this computer:</p><ul class="plan">';
-    for(const a of doable) h+='<li>'+esc(a.desc)+(a.needs_sudo?' <span class="tag">admin</span>':'')+'</li>';
-    h+='</ul><button type="button" class="bigbtn" onclick="approve()"'+(s.running?' disabled':'')+'>'+(s.running?'Installing…':'Approve &amp; Install')+'</button>';
-  } else if(!blocked.length && !needs.length){ h+='<p>Finishing up…</p>'; }
-  if(needs.length){
-    h+='<div class="needyou"><b>Your turn:</b><ul class="plan">';
-    for(const n of needs) h+='<li>'+esc(n.desc)+'</li>';
-    h+='</ul></div>';
-  }
-  if(blocked.length){
-    h+='<div class="needyou"><b>Needs your help:</b><ul class="plan">';
-    for(const a of blocked) h+='<li>'+esc(a.desc)+' — '+esc(a.blocked_reason)+'</li>';
-    h+='</ul></div>';
-  }
-  el.innerHTML=h+'</div>';
+    card+='I need to set up '+doable.length+' thing'+(doable.length>1?'s':'')+' on this computer:<ul class="plan">';
+    for(const a of doable) card+='<li>'+esc(a.desc)+(a.needs_sudo?' <span class="tag">admin</span>':'')+'</li>';
+    card+='</ul><button type="button" class="bigbtn" onclick="approve()"'+(s.running?' disabled':'')+'>'+(s.running?'Installing…':'Install')+'</button>';
+  } else if(needs.length){
+    card+=brainChooser();
+  } else if(blocked.length){
+    card+='<b>Needs your help:</b><ul class="plan">';
+    for(const a of blocked) card+='<li>'+esc(a.desc)+' — '+esc(a.blocked_reason)+'</li>';
+    card+='</ul>';
+  } else { card+='Finishing up…'; }
+  cl.insertAdjacentHTML('beforeend',card+'</div>');
 }
 async function approve(){
   const s=await fetch('/api/setup').then(r=>r.json());
@@ -163,8 +184,8 @@ async function load(){
     fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
     fetch('/api/procs').then(r=>r.json()), fetch('/api/conversations').then(r=>r.json()),
     fetch('/api/setup').then(r=>r.json())]);
-  renderSetup(setup);
-  if(!booted){ booted=true; show(setup.complete?'chat':'setup'); }
+  setupState=setup;
+  if(!booted){ booted=true; show('chat'); if(!setup.complete) activeConv='setup'; }
   if(!activeConv && convs.length) activeConv = convs[0].id;
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
   // conversations sidebar
@@ -231,6 +252,7 @@ async function load(){
     } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
     html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
   }
+  renderSetupCard(cl);
   const totalOpen = convs.reduce((s,c)=>s+(c.open_q||0),0);
   const badge=document.getElementById('qbadge');
   badge.hidden = totalOpen===0; badge.textContent = totalOpen;
