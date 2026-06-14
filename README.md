@@ -5,8 +5,9 @@ world from durable memory, decides ONE bounded thing to do, spawns workers,
 audits itself, and writes back what it learned. A "sleeper" that rebuilds its
 context every wake; a swarm coordinated through shared memory.
 
-**The installer (`install.sh`) is the source of truth.** To change anything,
-edit the matching `gen_*`/heredoc in `install.sh` and re-run `./install.sh`.
+**The `jarvis/` package is the source of truth — edit the files directly.** `install.sh`
+bootstraps and runs everything (scaffolds config, checks deps, brings the dashboard up); it only
+*seeds* the package when files are missing, so re-running it never overwrites your code.
 
 ## Architecture (generic core + pluggable adapters)
 - `jarvis/kernel.py`   wake → perceive → orient → decide → act → reflect (one bounded tick)

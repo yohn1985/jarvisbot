@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  Jarvis — install.sh   (the source of truth: edit THIS to change the system)
+#  Jarvis — install.sh   (bootstrap + run; the jarvis/ package is the source of truth)
 # ----------------------------------------------------------------------------
 #  A standalone, open-source-clean, self-improving agent runtime.
-#  This installer MATERIALIZES the project (config, schema, kernel, adapters)
-#  via heredocs, sets up the stack, and lets the shadow kernel "breathe".
-#  To change Jarvis: edit the relevant gen_* function below and re-run.
+#  This installer SEEDS missing project files (never overwrites your code), sets up the
+#  stack, brings up the dashboard, and lets the shadow kernel "breathe".
+#  To change Jarvis: edit the files under jarvis/ directly.
 #
 #  Subcommands:
 #    scaffold     (default) materialize/refresh generated files (idempotent)
@@ -41,8 +41,9 @@ world from durable memory, decides ONE bounded thing to do, spawns workers,
 audits itself, and writes back what it learned. A "sleeper" that rebuilds its
 context every wake; a swarm coordinated through shared memory.
 
-**The installer (`install.sh`) is the source of truth.** To change anything,
-edit the matching `gen_*`/heredoc in `install.sh` and re-run `./install.sh`.
+**The `jarvis/` package is the source of truth — edit the files directly.** `install.sh`
+bootstraps and runs everything; it only *seeds* the package when files are missing, so re-running
+it never overwrites your code.
 
 ## Architecture (generic core + pluggable adapters)
 - `jarvis/kernel.py`   wake → perceive → orient → decide → act → reflect (one bounded tick)
@@ -266,12 +267,12 @@ CREATE TABLE IF NOT EXISTS knowledge_map (   -- areas + staleness (curiosity dri
 );
 EOF
 
-  gen jarvis/__init__.py <<'EOF'
+  seed jarvis/__init__.py <<'EOF'
 """Jarvis: a standalone self-improving agent runtime."""
 __version__ = "0.0.1"
 EOF
 
-  gen jarvis/config.py <<'EOF'
+  seed jarvis/config.py <<'EOF'
 """Config loader: DEFAULTS <- config.example.yaml (documented base) <- config.yaml (your
 deltas) <- .env (secrets). Deep-merged, so your config.yaml stays tiny. Degrades gracefully
 (runs on DEFAULTS alone if pyyaml is absent)."""
@@ -314,7 +315,7 @@ def load(root: str | None = None) -> dict:
     return cfg
 EOF
 
-  gen jarvis/kernel.py <<'EOF'
+  seed jarvis/kernel.py <<'EOF'
 #!/usr/bin/env python3
 """
 The kernel: ONE bounded tick. The kernel is dumb and reliable; the intelligence
@@ -482,7 +483,7 @@ EOF
   seed jarvis/adapters/__init__.py <<'EOF'
 """Pluggable adapters: nothing infra-specific lives in the kernel core."""
 EOF
-  gen jarvis/adapters/llm.py <<'EOF'
+  seed jarvis/adapters/llm.py <<'EOF'
 """LLM provider router (the mind): role -> "backend:model", dispatched to a CLI backend.
 Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prompt}; no
 {prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
@@ -545,7 +546,7 @@ def build_llm(cfg):
     return RoutingLLM(llm.get("routing"), llm.get("backends"),
                       llm.get("aliases"), llm.get("fallbacks"))
 EOF
-  gen jarvis/adapters/memory.py <<'EOF'
+  seed jarvis/adapters/memory.py <<'EOF'
 """Memory adapter interface. Tiers wired in jarvis/memory/tiers.py."""
 from abc import ABC, abstractmethod
 
@@ -562,7 +563,7 @@ class Notifier(ABC):
     @abstractmethod
     def tell(self, message: str) -> None: ...
 EOF
-  gen jarvis/adapters/worksource.py <<'EOF'
+  seed jarvis/adapters/worksource.py <<'EOF'
 """Work source adapter: where tasks/issues come from (folder/gitea/github)."""
 from abc import ABC, abstractmethod
 
@@ -571,10 +572,10 @@ class WorkSource(ABC):
     def open_items(self) -> list: ...
 EOF
 
-  gen jarvis/memory/__init__.py <<'EOF'
+  seed jarvis/memory/__init__.py <<'EOF'
 """Three-tier memory (MemGPT-style): core (RAM) / recall / archival (disk)."""
 EOF
-  gen jarvis/memory/tiers.py <<'EOF'
+  seed jarvis/memory/tiers.py <<'EOF'
 """MemGPT-style tiers + self-editing API. The mind calls these during a tick.
 core = pinned in-context (identity + current focus, self-editable);
 recall = recent episodic (searchable); archival = cold consolidated knowledge."""
@@ -588,7 +589,7 @@ class ArchivalMemory:
     def search(self, query: str, limit: int = 8) -> list: ...
 EOF
 
-  gen jarvis/safety/__init__.py <<'EOF'
+  seed jarvis/safety/__init__.py <<'EOF'
 """Safety: action-class gates + the DGM-style self-modification seatbelt."""
 EOF
   seed jarvis/safety/seatbelt.py <<'EOF'
@@ -609,7 +610,7 @@ def gate(action_class: str, cfg: dict) -> str:
 def propose_self_edit(*a, **k): raise NotImplementedError  # sandbox -> eval -> red-team -> adopt|rollback
 EOF
 
-  gen jarvis/workers/__init__.py <<'EOF'
+  seed jarvis/workers/__init__.py <<'EOF'
 """Workers the kernel spawns on demand: deep-fix / fixer / on-call / explorer.
 These wrap the proven tools (deep-fix v5, the fixer red-team gate, evidence)."""
 EOF
@@ -650,7 +651,7 @@ EOF
 # Skills FRAMEWORK lives in the installer; individual skills are modular folders
 # under skills/<name>/ (manifest + code + own requirements) — an extensible repo.
 scaffold_skills(){
-  gen jarvis/skills.py <<'EOF'
+  seed jarvis/skills.py <<'EOF'
 #!/usr/bin/env python3
 """Skill registry: discover skills by scanning skills/*/SKILL.md frontmatter.
 A skill is a self-contained folder (manifest + code + own requirements), so the
@@ -685,7 +686,7 @@ if __name__ == "__main__":
     else:
         print(json.dumps(list_skills(), indent=2))
 EOF
-  gen skills/README.md <<'EOF'
+  seed skills/README.md <<'EOF'
 # Jarvis skills
 
 A modular, extensible capability repo. Each skill is a self-contained folder:
