@@ -31,6 +31,15 @@ def load_env() -> None:
             os.environ.setdefault(k, v)
 
 
+def unset(name: str) -> None:
+    """Remove a secret from .env and the current process env (used to clean a bad credential)."""
+    name = name.strip()
+    if ENV.exists():
+        kept = [ln for ln in ENV.read_text().splitlines() if not re.match(rf"\s*{re.escape(name)}\s*=", ln)]
+        ENV.write_text("\n".join(kept) + ("\n" if kept else ""))
+    os.environ.pop(name, None)
+
+
 def set_secret(name: str, value: str) -> None:
     """Upsert a secret into .env (chmod 600) and into the current process env."""
     name = name.strip()

@@ -166,17 +166,49 @@ def _known_context(limit=9000):
     return "".join(f"\n\n=== {p.name} ===\n{p.read_text()}" for p in docs[:3])[:limit]
 
 
+_EXTERNAL_HINTS = ("version", "release", "released", "latest", "newest", "current", "best practice",
+                   "recommended", "cve", "vulnerab", "upstream", "docs", "documentation", "how to",
+                   "standard", "deprecat", "eol", "support", "compatible", "pricing", "cost",
+                   "2024", "2025", "2026", "is there", "does ", "should i", "vs ")
+
+
+def _looks_external(q: str) -> bool:
+    """A question whose answer depends on the outside world (not just this machine) — confirm it
+    on the live web instead of trusting the model's training (skeptical / deep-fix discipline)."""
+    ql = q.lower()
+    return any(h in ql for h in _EXTERNAL_HINTS)
+
+
+def _web_evidence(q: str, llm) -> str:
+    """Pull live web evidence for an external question via the shipped web skill. Best-effort."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("jarvis_web_skill", str(ROOT / "skills" / "web" / "skill.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        ans, results = m.research(q, llm)
+        src = "\n".join("- " + r.get("url", "") for r in (results or [])[:3])
+        return (ans + (f"\n\nSOURCES:\n{src}" if src else "")).strip()
+    except Exception:
+        return ""
+
+
 def answer_one(llm):
-    """Take the oldest open question and answer it from accumulated knowledge — Jarvis building
-    understanding one question at a time. Returns (question, answer) or None."""
+    """Take the oldest open question and answer it — building understanding one question at a time,
+    and CONFIRMING external facts on the live web rather than trusting training. Returns
+    (question, answer) or None."""
     queue = _load_q()
     nxt = next((x for x in queue if not x.get("answered")), None)
     if not nxt:
         return None
-    prompt = ("You are building your own understanding of your environment. Using your existing notes "
-              "below, investigate and answer this question as specifically as you can. If you truly "
-              "cannot answer from what's known, state exactly what data you'd need to find out.\n\n"
-              f"QUESTION: {nxt['q']}\n\nYOUR NOTES:\n{_known_context()}")
+    web = _web_evidence(nxt["q"], llm) if _looks_external(nxt["q"]) else ""
+    prompt = ("You are building your own understanding of your environment. Investigate and answer this "
+              "question as specifically as you can. Be skeptical: prefer the live WEB EVIDENCE and your "
+              "NOTES over training-cutoff assumptions; if they conflict, trust the evidence and say so. "
+              "If you truly cannot answer from what's known, state exactly what data you'd need.\n\n"
+              f"QUESTION: {nxt['q']}\n\n"
+              f"WEB EVIDENCE (live):\n{web or '(none gathered)'}\n\n"
+              f"YOUR NOTES:\n{_known_context()}")
     ans = llm.run("orchestrator", prompt, timeout=180).strip()
     # deep-fix discipline: red-team the answer; revise once if it doesn't survive.
     try:

@@ -26,6 +26,8 @@ def next_delay(cfg: dict, decision: dict) -> int:
     hb = int((cfg.get("wake", {}) or {}).get("heartbeat_seconds", 1800))
     if decision.get("asked"):
         return min(hb, 120)                 # waiting on the owner — check back soon-ish
+    if decision.get("learning_backlog", 0) > 0:
+        return min(hb, 180)                 # still questions to answer — learn fast, then idle
     rung = decision.get("rung", "")
     if rung in ("p0_active_incident", "p1_unfinished_wip", "p2_self_caused_regression"):
         return 60

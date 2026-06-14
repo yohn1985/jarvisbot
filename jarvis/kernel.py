@@ -113,10 +113,27 @@ def _maybe_ask_upgrade(cfg):
         pass
 
 
+def _open_question_count():
+    """How many discovery questions Jarvis still hasn't answered (drives learning cadence)."""
+    import json
+    from pathlib import Path
+    try:
+        qf = Path(__file__).resolve().parent.parent / "workspace" / "knowledge" / "questions.json"
+        return sum(1 for x in json.loads(qf.read_text()) if not x.get("answered"))
+    except Exception:
+        return 0
+
+
+# How many questions to chew through per curiosity cycle. >1 so Jarvis doesn't sit on the same open
+# questions for hours, but small enough that a tick stays bounded (each answer is ~2 Opus calls).
+# The loop also wakes faster while a learning backlog remains (see loop.next_delay).
+_ANSWER_PER_CYCLE = 2
+
+
 def _explore(cfg, decision):
-    """Autonomous curiosity CYCLE: if there are open questions, answer ONE this cycle (build
-    understanding); otherwise (re)discover when the picture is stale, which queues fresh questions.
-    So it discovers -> wonders -> answers -> keeps building. Read-only, so it runs even in shadow."""
+    """Autonomous curiosity CYCLE: if there are open questions, answer several this cycle (build
+    understanding fast); otherwise (re)discover when the picture is stale, which queues fresh
+    questions. So it discovers -> wonders -> answers -> keeps building. Read-only; runs in shadow."""
     import json, subprocess, time as _t
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent
@@ -129,18 +146,19 @@ def _explore(cfg, decision):
 
     # Routine curiosity is SILENT — it shows in the RUNS feed (decision['worker']); chat is reserved
     # for things the owner should see (suggestions, questions, problems) so it isn't spammed.
-    try:
-        open_qs = sum(1 for x in json.loads((root / "workspace" / "knowledge" / "questions.json").read_text())
-                      if not x.get("answered"))
-    except Exception:
-        open_qs = 0
+    open_qs = _open_question_count()
 
-    if open_qs > 0:                       # learning: answer one open question this cycle
-        try:
-            run(["--answer-one"])
-            decision["worker"] = "curiosity: answered 1 question"
-        except Exception as e:
-            decision["worker"] = f"(answer failed: {str(e)[:50]})"
+    if open_qs > 0:                       # learning: answer several open questions this cycle
+        answered = 0
+        for _ in range(min(open_qs, _ANSWER_PER_CYCLE)):
+            try:
+                run(["--answer-one"])
+                answered += 1
+            except Exception:
+                break
+        remaining = _open_question_count()
+        decision["worker"] = f"curiosity: answered {answered} question(s), {remaining} left"
+        decision["learning_backlog"] = remaining     # >0 -> loop wakes sooner to keep learning
         return
 
     marker = root / "state" / "explore.json"            # no open questions -> rediscover if stale
@@ -203,29 +221,40 @@ def think(cfg, decision, world):
         return
     if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
         return
+    # Don't spend the expensive main brain reflecting on every routine learning tick — when Jarvis is
+    # just chewing its question queue, the answering IS the work. Reflect on Opus only when caught up
+    # (queue empty) or facing real work, where the judgment actually matters.
+    if decision.get("rung") == "p5_curiosity" and _open_question_count() > 0:
+        return
     try:
         from jarvis.adapters.llm import build_llm
-        from jarvis import messaging
+        from jarvis import messaging, persona
     except Exception:
         return
     llm = build_llm(cfg)
     if not llm:
         return
     recurring = [r.get("sig") for r in world.get("_ledger", {}).get("recurring", [])][:3]
+    open_qs = _open_question_count()
+    # The tick reasons on the MAIN brain (orchestrator), in character — this is Jarvis thinking,
+    # not a cheap triage paraphrase. Persona makes it driven + skeptical instead of a narrator.
     prompt = (
-        f"You are {cfg['identity']['name']}, an autonomous ops agent, on a {decision['mode']} tick.\n"
-        f"You triaged to rung={decision['rung']} -> action: {decision['action']}.\n"
-        f"Open backlog items: {world.get('_backlog_count', 0)}. Recurring issues in memory: {recurring}.\n\n"
-        "In 2-3 sentences, say whether this is the right next move and the concrete first step.\n"
-        "If you genuinely cannot proceed safely without information only the owner has, INSTEAD reply with "
-        "exactly one line starting 'QUESTION: ' followed by your question."
+        persona.system(cfg) + "\n\n"
+        f"This is an autonomous {decision['mode']} tick. You triaged to rung={decision['rung']} "
+        f"-> {decision['action']}.\n"
+        f"Open backlog: {world.get('_backlog_count', 0)}. Questions you're still chasing: {open_qs}. "
+        f"Recurring issues in memory: {recurring}.\n\n"
+        "Think like the owner of this system, not a narrator. In 2-3 sharp, specific sentences: is this "
+        "the right next move, and what is the concrete first step? Be skeptical; don't restate the "
+        "obvious or pad. If you genuinely cannot proceed without information ONLY the human owner has, "
+        "INSTEAD reply with exactly one line starting 'QUESTION: ' followed by your question."
     )
     try:
-        out = llm.run("triage", prompt, timeout=120).strip()
+        out = llm.run("orchestrator", prompt, timeout=150).strip()
     except Exception as e:
         decision["thought"] = f"(no LLM: {str(e)[:80]})"
         return
-    decision["model"] = (cfg.get("llm", {}).get("routing", {}) or {}).get("triage", "")
+    decision["model"] = (cfg.get("llm", {}).get("routing", {}) or {}).get("orchestrator", "")
     if out.upper().startswith("QUESTION:"):
         q = out.split(":", 1)[1].strip()
         decision["asked"] = q
