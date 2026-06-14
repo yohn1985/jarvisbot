@@ -103,13 +103,43 @@ def _procs():
     return procs
 
 
+_SKILL_INSTALLING = set()
+
+
 def _skills():
-    """The skills shipped with the core (and any in the private overlay)."""
+    """The shipped skills, each with install status so the dashboard can offer a one-click Install."""
     try:
         from jarvis.skills import list_skills
-        return list_skills()
+        from jarvis.bootstrap import installer
+        installed_pkgs = installer._venv_installed()
+        out = []
+        for s in list_skills():
+            req = Path(s.get("dir", "")) / "requirements.txt"
+            has = installer._has_real_reqs(req)
+            sat = (not has) or (installer._skill_satisfied(req, installed_pkgs) if installed_pkgs is not None else False)
+            out.append({**s, "has_deps": has, "installed": sat, "installing": s.get("name") in _SKILL_INSTALLING})
+        return out
     except Exception:
         return []
+
+
+def _install_skill(name):
+    """Install a skill's deps into the venv in the background (one-click from the dashboard)."""
+    if not name or name in _SKILL_INSTALLING:
+        return {"started": False}
+    _SKILL_INSTALLING.add(name)
+
+    def _run():
+        try:
+            subprocess.run([str(ROOT / "install.sh"), "skill", "install", name],
+                           capture_output=True, text=True, timeout=300)
+        except Exception:
+            pass
+        finally:
+            _SKILL_INSTALLING.discard(name)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"started": True}
 
 
 def _discovery():
@@ -342,6 +372,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/approve":
             ids = body.get("ids")
             return self._send(200, json.dumps(_approve(ids)))
+        if u.path == "/api/skill-install":
+            return self._send(200, json.dumps(_install_skill((body.get("name") or "").strip())))
         if u.path == "/api/verify-brain":
             try:
                 from jarvis.config import load

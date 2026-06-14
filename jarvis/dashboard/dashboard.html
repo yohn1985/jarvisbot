@@ -98,6 +98,7 @@
   #skills .card{ max-width:760px; }
   .skwhen{ color:var(--dim); margin-top:6px; font-size:12px; }
   .skrun{ margin-top:8px; background:#0c100c; border:1px solid var(--line); border-radius:4px; padding:5px 8px; color:var(--grntxt); font-size:11px; display:inline-block; }
+  .skok{ color:var(--grntxt); font-size:12px; }
 </style>
 </head>
 <body>
@@ -154,16 +155,25 @@ let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledg
 let _kwSig='', _cfgSig='', _chatSig='', _skSig='';
 function renderSkills(list){
   const el=document.getElementById('skills');
-  const sig=JSON.stringify((list||[]).map(s=>s.name));
+  const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing]));
   if(sig===_skSig) return; _skSig=sig;
   if(!list||!list.length){ el.innerHTML='<div class="kbody"><div class="empty" style="padding:24px">No skills found.</div></div>'; return; }
   let h='<div class="kbody"><h2>Skills shipped with Jarvis</h2>';
   for(const s of list){
+    let btn;
+    if(s.installed) btn='<span class="skok">✓ installed</span>';
+    else if(s.installing) btn='<button type="button" class="bigbtn" disabled>Installing…</button>';
+    else if(s.has_deps) btn='<button type="button" class="bigbtn" onclick="installSkill(\''+esc(s.name)+'\')">Install</button>';
+    else btn='<span class="skok">ready (no deps)</span>';
     h+='<div class="card"><h3>'+esc(s.name||'')+'</h3><div>'+esc(s.description||'')+'</div>'+
        (s.when_to_use?'<div class="skwhen"><b>When:</b> '+esc(s.when_to_use)+'</div>':'')+
-       '<div class="skrun">./install.sh skill run '+esc(s.name||'')+'</div></div>';
+       '<div style="margin-top:10px">'+btn+'</div></div>';
   }
   el.innerHTML=h+'</div>';
+}
+async function installSkill(name){
+  await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  _skSig=''; load();
 }
 function md(t){
   const lines=(t||'').split('\n'); let h='', inList=false, inTable=false, tbuf=[];
