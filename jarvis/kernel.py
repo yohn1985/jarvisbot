@@ -73,6 +73,13 @@ def tick(cfg) -> dict:
                worker=decision.get("worker", ""))
     except Exception:
         pass
+    try:                                   # reflect: write this experience to feedback memory
+        from jarvis import feedback
+        feedback.record(cfg, kind="tick", area=rung, summary=action[:120],
+                        outcome=(decision.get("worker") or decision.get("asked")
+                                 or decision.get("thought") or "")[:160])
+    except Exception:
+        pass
     return decision
 
 def _main_brain_is_frontier(cfg):
