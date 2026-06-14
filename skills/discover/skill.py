@@ -206,6 +206,44 @@ def write_index():
     (DISC_DIR / "INDEX.md").write_text("\n".join(lines) + "\n")
 
 
+SUGGEST_MARKER = ROOT / "state" / "suggest.json"
+
+
+def _knowledge_sig():
+    docs = len(list(DISC_DIR.glob("*.md"))) if DISC_DIR.exists() else 0
+    notes = len(list(KNOW_DIR.glob("*.md"))) if KNOW_DIR.exists() else 0
+    return f"{docs}:{notes}"
+
+
+def suggest(llm, force=False):
+    """Review accumulated knowledge and proactively propose work to the owner — the 'super employee'
+    move. Gated on the knowledge signature so it only proposes when it has actually learned more."""
+    sig = _knowledge_sig()
+    try:
+        last = json.loads(SUGGEST_MARKER.read_text()).get("sig")
+    except Exception:
+        last = None
+    if not force and sig == last:
+        return None
+    notes = sorted(KNOW_DIR.glob("*.md"), reverse=True) if KNOW_DIR.exists() else []
+    learned = "".join(f"\n\n=== {p.name} ===\n{p.read_text()}" for p in notes[:5])
+    prompt = ("From your accumulated knowledge of this environment, propose 3-5 concrete, prioritized, "
+              "actionable things the owner might want done — improvements, risks, fixes, optimizations, "
+              "or worthwhile follow-ups. For each: a one-line **title** then a short 'why'. Be specific "
+              "to what you actually found; do not invent.\n\n"
+              f"DISCOVERY:\n{_known_context()}\n\nWHAT YOU'VE LEARNED:\n{learned}")
+    out = llm.run("orchestrator", prompt, timeout=200).strip()
+    SUGGEST_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    SUGGEST_MARKER.write_text(json.dumps({"sig": sig, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}))
+    try:
+        from jarvis import messaging
+        messaging.post_note("Here are things I think are worth doing:\n\n" + out,
+                            conv="suggestions", title="Suggestions")
+    except Exception:
+        pass
+    return out
+
+
 def organize(llm, facts: dict) -> str:
     blob = "\n\n".join(f"## {k}\n{v}" for k, v in facts.items() if v and not v.startswith("(unavailable"))
     prompt = (
@@ -225,6 +263,7 @@ def main():
     ap.add_argument("--print", action="store_true", help="also print the document")
     ap.add_argument("--network", action="store_true", help="also sweep the local subnet for devices/ports")
     ap.add_argument("--answer-one", action="store_true", help="answer one open question from the queue")
+    ap.add_argument("--suggest", action="store_true", help="propose work to the owner from what's known")
     a = ap.parse_args()
     cfg = load()
     llm = build_llm(cfg)
@@ -234,6 +273,10 @@ def main():
     if a.answer_one:                       # learning mode: answer one open question, keep building
         res = answer_one(llm)
         print(f"[discover] answered: {res[0]}" if res else "[discover] no open questions")
+        return
+    if a.suggest:                          # propose work to the owner from accumulated knowledge
+        out = suggest(llm, force=True)
+        print("[discover] suggested:\n" + out if out else "[discover] nothing new to suggest")
         return
 
     print("[discover] scanning host...", file=sys.stderr)

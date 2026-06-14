@@ -117,17 +117,23 @@ def _explore(cfg, decision):
         last = json.loads(marker.read_text()).get("ts", 0)
     except Exception:
         last = 0
-    if _t.time() - last < interval:
-        decision["thought"] = (decision.get("thought", "") + " (all caught up — nothing new to explore)").strip()
+    if _t.time() - last >= interval:
+        try:
+            run(["--network"])
+            marker.parent.mkdir(exist_ok=True)
+            marker.write_text(json.dumps({"ts": _t.time()}))
+            decision["worker"] = "curiosity: explored + queued new questions"
+            note("I explored my environment, refreshed my notes, and jotted new questions — see KNOWLEDGE.")
+        except Exception as e:
+            decision["worker"] = f"(explore failed: {str(e)[:50]})"
         return
+
+    # caught up (questions answered, discovery fresh) -> propose work (gated: only when knowledge grew)
     try:
-        run(["--network"])
-        marker.parent.mkdir(exist_ok=True)
-        marker.write_text(json.dumps({"ts": _t.time()}))
-        decision["worker"] = "curiosity: explored + queued new questions"
-        note("I explored my environment, refreshed my notes, and jotted new questions — see KNOWLEDGE.")
+        run(["--suggest"])
+        decision["worker"] = "curiosity: reviewed knowledge / proposed work"
     except Exception as e:
-        decision["worker"] = f"(explore failed: {str(e)[:50]})"
+        decision["worker"] = f"(suggest failed: {str(e)[:50]})"
 
 
 def act(cfg, decision, world):
