@@ -73,6 +73,20 @@ def _procs():
     return procs
 
 
+def _discovery():
+    """Discovery documents Jarvis has written about its world (newest first)."""
+    d = ROOT / "workspace" / "discovery"
+    if not d.exists():
+        return []
+    out = []
+    for p in sorted(d.glob("*.md"), reverse=True):
+        try:
+            out.append({"name": p.name, "content": p.read_text()})
+        except Exception:
+            pass
+    return out[:25]
+
+
 # --- bootstrap setup (the dashboard's guided checklist) ---
 _EXEC = {"running": False, "last": None}
 _EXEC_LOCK = threading.Lock()
@@ -188,6 +202,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_procs()))
         if u.path == "/api/setup":
             return self._send(200, json.dumps(_setup_state()))
+        if u.path == "/api/discovery":
+            return self._send(200, json.dumps(_discovery()))
         if u.path == "/api/conversations":
             return self._send(200, json.dumps(_conversations()))
         if u.path == "/api/messages":

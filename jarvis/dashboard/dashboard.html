@@ -79,6 +79,19 @@
   .choice.on{ background:#10241a; border-color:var(--grn); }
   .braindetail{ margin-top:10px; padding-top:8px; border-top:1px solid var(--line); }
   .braindetail code{ background:#0c100c; padding:1px 5px; border-radius:3px; }
+  #knowledge{ padding:0; overflow:hidden; height:100%; }
+  .kwrap{ display:flex; height:100%; }
+  .kdocs{ width:230px; min-width:230px; border-right:1px solid var(--line); overflow-y:auto; padding:12px 8px; display:flex; flex-direction:column; gap:3px; }
+  .kdoc{ text-align:left; background:none; border:none; color:var(--dim); padding:7px 9px; border-radius:6px; cursor:pointer; font:inherit; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .kdoc:hover{ background:#0f140e; } .kdoc.on{ background:#10241a; color:var(--txt); }
+  .kbody{ flex:1; overflow-y:auto; padding:18px 28px; }
+  .kbody h2{ color:var(--grntxt); font-size:16px; margin:14px 0 6px; }
+  .kbody h3{ color:var(--grntxt); font-size:13px; letter-spacing:1px; margin:16px 0 6px; }
+  .kbody h4{ color:var(--txt); font-size:12px; margin:12px 0 4px; }
+  .kbody code{ background:#0c100c; padding:1px 5px; border-radius:3px; }
+  .kbody .mdtable{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px 12px; overflow-x:auto; font-size:11px; color:var(--txt); }
+  .kbody ul{ margin:4px 0 8px; padding-left:20px; } .kbody li{ margin:3px 0; }
+  .kbody .sp{ height:6px; }
 </style>
 </head>
 <body>
@@ -89,6 +102,7 @@
 </header>
 <nav>
   <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
+  <button type="button" id="tab-knowledge" onclick="show('knowledge')">KNOWLEDGE</button>
   <button type="button" id="tab-runs" onclick="show('runs')">RUNS</button>
   <button type="button" id="tab-config" onclick="show('config')">CONFIG</button>
   <button type="button" id="tab-procs" onclick="show('procview')">PROCESSES</button>
@@ -112,6 +126,7 @@
         <button type="button" class="send" onclick="say()">send</button></div>
     </div>
   </section>
+  <section id="knowledge" hidden></section>
   <section id="config" hidden></section>
   <section id="procview" hidden>
     <table><thead><tr><th>PID</th><th>UPTIME</th><th>COMMAND</th><th></th></tr></thead>
@@ -121,13 +136,39 @@
 </main>
 <script>
 function show(id){
-  for(const s of ['runs','chat','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const s of ['runs','chat','knowledge','config','procview']){ document.getElementById(s).hidden = (s!==id); }
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
-let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='';
+let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0;
+function md(t){
+  const lines=(t||'').split('\n'); let h='', inList=false, inTable=false, tbuf=[];
+  const fl=()=>{ if(inList){h+='</ul>';inList=false;} };
+  const ft=()=>{ if(inTable){h+='<pre class="mdtable">'+esc(tbuf.join('\n'))+'</pre>';tbuf=[];inTable=false;} };
+  for(const raw of lines){
+    if(raw.trim().startsWith('|')){ inTable=true; tbuf.push(raw); continue; } ft();
+    const l=esc(raw).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+?)`/g,'<code>$1</code>');
+    if(/^#### /.test(raw)){ fl(); h+='<h4>'+l.slice(5)+'</h4>'; }
+    else if(/^### /.test(raw)){ fl(); h+='<h4>'+l.slice(4)+'</h4>'; }
+    else if(/^## /.test(raw)){ fl(); h+='<h3>'+l.slice(3)+'</h3>'; }
+    else if(/^# /.test(raw)){ fl(); h+='<h2>'+l.slice(2)+'</h2>'; }
+    else if(/^\s*[-*] /.test(raw)){ if(!inList){h+='<ul>';inList=true;} h+='<li>'+l.replace(/^\s*[-*] /,'')+'</li>'; }
+    else if(/^\s*\d+\. /.test(raw)){ if(!inList){h+='<ul>';inList=true;} h+='<li>'+l.replace(/^\s*\d+\.\s/,'')+'</li>'; }
+    else if(raw.trim()===''){ fl(); h+='<div class="sp"></div>'; }
+    else { fl(); h+='<div>'+l+'</div>'; }
+  }
+  fl(); ft(); return h;
+}
+function selectDoc(i){ knowledgeSel=i; renderKnowledge(knowledgeDocs); }
+function renderKnowledge(docs){
+  knowledgeDocs=docs||[]; const el=document.getElementById('knowledge');
+  if(!knowledgeDocs.length){ el.innerHTML='<div class="kwrap"><div class="empty" style="padding:24px">Jarvis hasn\'t explored yet — it writes here as it discovers its world.</div></div>'; return; }
+  if(knowledgeSel>=knowledgeDocs.length) knowledgeSel=0;
+  const list=knowledgeDocs.map((d,i)=>'<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>').join('');
+  el.innerHTML='<div class="kwrap"><div class="kdocs">'+list+'</div><div class="kbody">'+md(knowledgeDocs[knowledgeSel].content)+'</div></div>';
+}
 const JARVIS_ART = [
 "     ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗",
 "     ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝",
@@ -189,11 +230,11 @@ async function approve(){
   load();
 }
 async function load(){
-  const [runs,cfg,procs,convs,setup] = await Promise.all([
+  const [runs,cfg,procs,convs,setup,disc] = await Promise.all([
     fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
     fetch('/api/procs').then(r=>r.json()), fetch('/api/conversations').then(r=>r.json()),
-    fetch('/api/setup').then(r=>r.json())]);
-  setupState=setup;
+    fetch('/api/setup').then(r=>r.json()), fetch('/api/discovery').then(r=>r.json())]);
+  setupState=setup; renderKnowledge(disc);
   if(!booted){ booted=true; show('chat'); if(!setup.complete) activeConv='setup'; }
   if(!activeConv && convs.length) activeConv = convs[0].id;
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
