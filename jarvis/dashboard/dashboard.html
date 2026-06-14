@@ -99,6 +99,9 @@
   .skwhen{ color:var(--dim); margin-top:6px; font-size:12px; }
   .skrun{ margin-top:8px; background:#0c100c; border:1px solid var(--line); border-radius:4px; padding:5px 8px; color:var(--grntxt); font-size:11px; display:inline-block; }
   .skok{ color:var(--grntxt); font-size:12px; }
+  #models{ padding:0; overflow:hidden; height:100%; }
+  #models .kbody{ height:100%; }
+  #models .card{ max-width:640px; }
 </style>
 </head>
 <body>
@@ -111,6 +114,7 @@
   <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
   <button type="button" id="tab-knowledge" onclick="show('knowledge')">KNOWLEDGE</button>
   <button type="button" id="tab-skills" onclick="show('skills')">SKILLS</button>
+  <button type="button" id="tab-models" onclick="show('models')">MODELS</button>
   <button type="button" id="tab-runs" onclick="show('runs')">RUNS</button>
   <button type="button" id="tab-config" onclick="show('config')">CONFIG</button>
   <button type="button" id="tab-procs" onclick="show('procview')">PROCESSES</button>
@@ -136,6 +140,7 @@
   </section>
   <section id="knowledge" hidden></section>
   <section id="skills" hidden></section>
+  <section id="models" hidden></section>
   <section id="config" hidden></section>
   <section id="procview" hidden>
     <table><thead><tr><th>PID</th><th>UPTIME</th><th>COMMAND</th><th></th></tr></thead>
@@ -145,14 +150,41 @@
 </main>
 <script>
 function show(id){
-  for(const s of ['runs','chat','knowledge','skills','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const s of ['runs','chat','knowledge','skills','models','config','procview']){ document.getElementById(s).hidden = (s!==id); }
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0;
-let _kwSig='', _cfgSig='', _chatSig='', _skSig='';
+let _kwSig='', _cfgSig='', _chatSig='', _skSig='', _mdSig='', modelDraft={};
+function renderModels(list){
+  const el=document.getElementById('models');
+  const sig=JSON.stringify((list||[]).map(m=>[m.id,m.connected,m.is_main]));
+  if(sig===_mdSig) return; _mdSig=sig;
+  let h='<div class="kbody"><h2>Models — Jarvis’s brains</h2>'+
+    '<p>Main brain = deep reasoning (wants a frontier model). Agent tier = cheap models for spawned work. More coming.</p>';
+  for(const m of (list||[])){
+    const status = m.is_main ? '<span class="skok">★ main brain</span>'
+      : (m.connected ? '<span class="skok">✓ connected</span>'
+         : '<span style="color:var(--dim)">not connected</span>');
+    h+='<div class="card"><h3>'+esc(m.name)+' <span class="tag">'+esc(m.tier)+'</span></h3>'+
+       '<div style="margin:4px 0">'+status+'</div>'+
+       '<div style="color:var(--dim);font-size:12px">'+esc(m.how)+'</div>';
+    if(m.field){
+      h+='<div class="ansrow" style="margin-top:8px"><input id="md-'+m.id+'" type="password" placeholder="paste '+(m.field==='token'?'token':'key')+'…" value="'+esc(modelDraft[m.id]||'')+'" oninput="modelDraft[\''+m.id+'\']=this.value"/>'+
+         '<button type="button" class="bigbtn" onclick="connectModel(\''+m.id+'\')">Connect</button></div>';
+    }
+    h+='</div>';
+  }
+  el.innerHTML=h+'</div>';
+}
+async function connectModel(id){
+  const el=document.getElementById('md-'+id); const v=(el?el.value:modelDraft[id]||'').trim();
+  if(!v) return;
+  await fetch('/api/brain-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:id,key:v})});
+  modelDraft[id]=''; _mdSig=''; load();
+}
 function renderSkills(list){
   const el=document.getElementById('skills');
   const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing]));
@@ -266,12 +298,12 @@ async function approve(){
   load();
 }
 async function load(){
-  const [runs,cfg,procs,convs,setup,disc,skl] = await Promise.all([
+  const [runs,cfg,procs,convs,setup,disc,skl,mdl] = await Promise.all([
     fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
     fetch('/api/procs').then(r=>r.json()), fetch('/api/conversations').then(r=>r.json()),
     fetch('/api/setup').then(r=>r.json()), fetch('/api/discovery').then(r=>r.json()),
-    fetch('/api/skills').then(r=>r.json())]);
-  setupState=setup; renderKnowledge(disc); renderSkills(skl);
+    fetch('/api/skills').then(r=>r.json()), fetch('/api/models').then(r=>r.json())]);
+  setupState=setup; renderKnowledge(disc); renderSkills(skl); renderModels(mdl);
   if(!booted){ booted=true; show('chat'); if(!setup.complete) activeConv='setup'; }
   if(!activeConv && convs.length) activeConv = convs[0].id;
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];

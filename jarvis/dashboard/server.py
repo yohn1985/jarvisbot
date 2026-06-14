@@ -249,6 +249,42 @@ def _chat_reply(conv):
         pass
 
 
+def _set_main_brain(target):
+    """Point the MAIN reasoning (orchestrator + red_team) at a frontier backend, leaving the cheap
+    agent roles as they are (e.g. DeepSeek). target like 'claude:opus'."""
+    import yaml
+    p = ROOT / "config.yaml"
+    data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
+    routing = data.setdefault("llm", {}).setdefault("routing", {})
+    routing["orchestrator"] = target
+    routing["red_team"] = target
+    p.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _models():
+    """Model cards for the MODELS tab: which brains are connected + which is the main brain."""
+    cfg = {}
+    try:
+        from jarvis.config import load
+        cfg = load()
+    except Exception:
+        pass
+    main = ((cfg.get("llm", {}) or {}).get("routing", {}) or {}).get("orchestrator", "")
+    return [
+        {"id": "claude", "name": "Claude (Anthropic)", "tier": "frontier", "field": "token",
+         "connected": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")),
+         "is_main": main.startswith("claude"),
+         "how": "Run `claude setup-token` on a machine where you're logged into Claude, then paste the token."},
+        {"id": "codex", "name": "Codex (OpenAI / ChatGPT)", "tier": "frontier", "field": None,
+         "connected": False, "is_main": main.startswith("codex"),
+         "how": "Run `codex login` in a terminal on this machine (opens the browser flow)."},
+        {"id": "ollama", "name": "Ollama Cloud (DeepSeek)", "tier": "agent / cheap", "field": "key",
+         "connected": bool(os.environ.get("OLLAMA_API_KEY")),
+         "is_main": main.startswith("ollama"),
+         "how": "Paste your Ollama Cloud API key (subscription pricing)."},
+    ]
+
+
 def _setup_state():
     """One simple snapshot the UI uses to show the next thing for the owner to do."""
     try:
@@ -341,6 +377,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_discovery()))
         if u.path == "/api/skills":
             return self._send(200, json.dumps(_skills()))
+        if u.path == "/api/models":
+            return self._send(200, json.dumps(_models()))
         if u.path == "/api/conversations":
             return self._send(200, json.dumps(_conversations()))
         if u.path == "/api/messages":
@@ -386,21 +424,28 @@ class H(BaseHTTPRequestHandler):
             prov, key = (body.get("provider") or "").strip(), (body.get("key") or "").strip()
             try:
                 from jarvis.bootstrap import secrets
-                env_name = {"ollama": "OLLAMA_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-                            "openai": "OPENAI_API_KEY"}.get(prov, prov.upper() + "_API_KEY")
-                if key:
-                    secrets.set_secret(env_name, key)
+                from jarvis.config import load
+                from jarvis.bootstrap import preflight
+                if prov == "claude":                       # subscription via setup-token -> MAIN brain
+                    if not key:
+                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
+                    secrets.set_secret("CLAUDE_CODE_OAUTH_TOKEN", key)
+                    _set_main_brain("claude:opus")
+                    ok, detail = preflight.recheck_brain(load())
+                    return self._send(200, json.dumps({"ok": ok, "detail": detail}))
                 if prov == "ollama":
+                    if key:
+                        secrets.set_secret("OLLAMA_API_KEY", key)
                     secrets.load_env()
                     if not os.environ.get("OLLAMA_API_KEY"):
                         return self._send(400, json.dumps({"ok": False, "error": "no Ollama key stored yet"}))
-                    _enable_ollama_cloud()                 # wire backend + routing to the stored key
-                    from jarvis.config import load
-                    from jarvis.bootstrap import preflight
-                    ok, detail = preflight.recheck_brain(load())   # probe now -> brain live
+                    _enable_ollama_cloud()                 # agents tier + (until a frontier is set) main
+                    ok, detail = preflight.recheck_brain(load())
                     return self._send(200, json.dumps({"ok": ok, "detail": detail}))
                 if not key:
                     return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
+                env_name = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(prov, prov.upper() + "_API_KEY")
+                secrets.set_secret(env_name, key)
                 return self._send(200, json.dumps({"ok": True, "stored": env_name}))
             except Exception as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
