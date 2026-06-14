@@ -1,0 +1,15 @@
+# Standalone stateful stack. `./install.sh up` brings this online.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: jarvis
+      POSTGRES_DB: ai_memory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    ports: ["5432:5432"]
+    volumes: ["./db/data:/var/lib/postgresql/data"]
+    restart: unless-stopped
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+    restart: unless-stopped

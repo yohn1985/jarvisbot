@@ -1,0 +1,53 @@
+# Jarvis config — NON-secret, environment-specific. Copy to config.yaml and edit.
+identity:
+  name: Jarvis
+  owner: yohn
+  mode: shadow            # shadow | assist | autonomous  (start in shadow!)
+
+# What may it DO without asking? Everything else is propose-only.
+action_classes:
+  investigate: allow      # read-only: always safe
+  propose: allow          # write a plan / open a PR (reviewed)
+  fix_pr: ask             # open a fix PR through the red-team gate
+  deploy: deny            # irreversible / customer-facing → earn it
+  infra_mutate: deny      # nginx/dns/firewall → never autonomous yet
+
+# LLM = a router over a model catalog (claude / codex / ollama local+cloud).
+llm:
+  backends: [claude, codex, ollama]
+  routing:                 # role -> model (cost/capability tiered)
+    triage:        ollama:small         # the wake-tick decision can be cheap
+    orchestrator:  claude:opus          # deep judgment — frontier only
+    red_team:      claude:opus          # self-audit must be sharp
+    fixer:         codex:gpt-5.5
+    researcher:    ollama:qwen-cloud    # high-volume leaf work — cheap
+    summarizer:    ollama:llama-local   # log/area summarization — cheapest
+  fallbacks: [claude:opus, ollama:small]
+
+memory:
+  working:   {kind: redis,    url: redis://localhost:6379/0}
+  episodic:  {kind: postgres, dsn: "postgresql://jarvis:${POSTGRES_PASSWORD}@localhost:5432/ai_memory"}
+  semantic:  {kind: none}    # none | mem0 | zep   (add when needed)
+
+notifier:
+  kind: telegram             # telegram | slack | stdout
+  casual: true               # talk like a colleague, not a dashboard
+
+worksource:
+  kind: folder               # folder | gitea | github
+  path: ./tasks
+
+# Wake triggers
+wake:
+  heartbeat_seconds: 1800    # floor so it never sleeps forever
+  alert_webhook: true        # Alertmanager -> poke
+  self_schedule: true        # it sets its own next-wake
+
+# The priority ladder the tick triages by (top non-empty rung wins).
+priorities:
+  - p0_active_incident
+  - p1_unfinished_wip
+  - p2_self_caused_regression
+  - p3_needs_human_backlog
+  - p4_self_maintenance
+  - p5_curiosity
