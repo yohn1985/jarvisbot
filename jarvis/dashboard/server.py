@@ -42,6 +42,14 @@ def _config():
     return {"source": None, "config": {}}
 
 
+def _messages():
+    try:
+        from jarvis import messaging
+        return messaging.recent(100)
+    except Exception:
+        return []
+
+
 def _procs():
     """Live Jarvis-related processes (kernel + spawned workers)."""
     try:
@@ -79,6 +87,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_config()))
         if u.path == "/api/procs":
             return self._send(200, json.dumps(_procs()))
+        if u.path == "/api/messages":
+            return self._send(200, json.dumps(_messages()))
         if u.path == "/api/kill":
             pid = (parse_qs(u.query).get("pid") or [""])[0]
             try:
@@ -86,6 +96,25 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"ok": True, "pid": pid}))
             except Exception as e:
                 return self._send(400, json.dumps({"ok": False, "error": str(e)}))
+        return self._send(404, json.dumps({"error": "not found"}))
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        try:
+            from jarvis import messaging
+            if u.path == "/api/answer":
+                ok = messaging.answer(body.get("id", ""), body.get("text", ""))
+                return self._send(200 if ok else 400, json.dumps({"ok": ok}))
+            if u.path == "/api/say":
+                messaging.say(body.get("text", ""))
+                return self._send(200, json.dumps({"ok": True}))
+        except Exception as e:
+            return self._send(500, json.dumps({"ok": False, "error": str(e)}))
         return self._send(404, json.dumps({"error": "not found"}))
 
 

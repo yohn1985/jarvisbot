@@ -32,6 +32,20 @@
   .mode-shadow{ color:var(--amber); } .mode-autonomous{ color:var(--grntxt); }
   .empty{ color:var(--dim); padding:18px 10px; }
   .refresh{ background:none; border:1px solid var(--line); color:var(--dim); padding:3px 10px; border-radius:3px; cursor:pointer; }
+  .badge{ background:var(--red); color:#fff; border-radius:9px; padding:0 6px; font-size:10px; margin-left:4px; }
+  #chatlog{ display:flex; flex-direction:column; gap:10px; max-width:780px; }
+  .msg{ padding:9px 12px; border-radius:7px; max-width:78%; white-space:pre-wrap; }
+  .msg.jarvis{ background:var(--panel); border:1px solid var(--line); align-self:flex-start; }
+  .msg.owner{ background:#10241a; border:1px solid #1d3a2a; align-self:flex-end; }
+  .msg .who{ color:var(--dim); font-size:10px; letter-spacing:1px; margin-bottom:3px; }
+  .msg.q{ border-color:#3a3320; background:#1a1710; }
+  .msg.q .who{ color:var(--amber); }
+  .ansrow{ display:flex; gap:6px; margin-top:8px; }
+  .ansrow input{ flex:1; }
+  input{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:7px 10px; border-radius:5px; font:inherit; }
+  .composer{ display:flex; gap:6px; max-width:780px; margin-top:14px; }
+  .composer input{ flex:1; }
+  .send,.ansbtn{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:6px 14px; border-radius:5px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -42,6 +56,7 @@
 </header>
 <nav>
   <button id="tab-runs" class="active" onclick="show('runs')">RUNS</button>
+  <button id="tab-chat" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
   <button id="tab-config" onclick="show('config')">CONFIG</button>
   <button id="tab-procs" onclick="show('procview')">PROCESSES</button>
 </nav>
@@ -50,6 +65,11 @@
     <table><thead><tr><th>TIME</th><th>MODE</th><th>POOL</th><th>MODEL</th><th>STATUS</th><th>DURATION</th><th>TARGET</th></tr></thead>
     <tbody id="runs-body"></tbody></table>
     <div id="runs-empty" class="empty" hidden>No runs yet — run <code>./install.sh breathe</code>.</div>
+  </section>
+  <section id="chat" hidden>
+    <div id="chatlog"></div>
+    <div class="composer"><input id="sayinput" placeholder="message Jarvis…" onkeydown="if(event.key==='Enter')say()"/>
+      <button type="button" class="send" onclick="say()">send</button></div>
   </section>
   <section id="config" hidden></section>
   <section id="procview" hidden>
@@ -60,14 +80,16 @@
 </main>
 <script>
 function show(id){
-  for(const s of ['runs','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const s of ['runs','chat','config','procview']){ document.getElementById(s).hidden = (s!==id); }
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
 }
+function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 async function load(){
-  const [runs,cfg,procs] = await Promise.all([
-    fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()), fetch('/api/procs').then(r=>r.json())]);
+  const [runs,cfg,procs,msgs] = await Promise.all([
+    fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
+    fetch('/api/procs').then(r=>r.json()), fetch('/api/messages').then(r=>r.json())]);
   // runs
   const rb=document.getElementById('runs-body'); rb.innerHTML='';
   document.getElementById('runs-empty').hidden = runs.length>0;
@@ -100,9 +122,33 @@ async function load(){
      `<tr class="run"><td><span class="dot"></span>${p.pid}</td><td>${p.etime}</td><td>${p.cmd}</td>`+
      `<td><button class="kill" onclick="kill('${p.pid}')">kill</button></td></tr>`);
   }
+  // chat
+  const cl=document.getElementById('chatlog'); cl.innerHTML='';
+  let openQ=0;
+  for(const m of msgs){
+    const isJ = m.from==='jarvis'; const isQ = m.kind==='question';
+    if(isQ && !m.answered) openQ++;
+    let html=`<div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">`+
+      `<div class="who">${isJ?'JARVIS':'YOU'}${isQ?' · QUESTION':''} · ${(m.ts||'').replace('T',' ')}</div>${esc(m.text)}`;
+    if(isQ && !m.answered){
+      html+=`<div class="ansrow"><input id="a-${m.id}" placeholder="answer…" onkeydown="if(event.key==='Enter')answerQ('${m.id}')"/>`+
+            `<button type="button" class="ansbtn" onclick="answerQ('${m.id}')">answer</button></div>`;
+    } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
+    html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
+  }
+  const badge=document.getElementById('qbadge');
+  badge.hidden = openQ===0; badge.textContent = openQ;
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
+async function answerQ(id){
+  const v=document.getElementById('a-'+id).value.trim(); if(!v) return;
+  await fetch('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,text:v})}); load();
+}
+async function say(){
+  const el=document.getElementById('sayinput'); const v=el.value.trim(); if(!v) return; el.value='';
+  await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v})}); load();
+}
 load(); setInterval(load, 4000);
 </script>
 </body>

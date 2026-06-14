@@ -101,6 +101,7 @@ __pycache__/
 output/
 *.log
 db/data/
+state/
 config.yaml
 EOF
 
@@ -131,15 +132,24 @@ action_classes:
 
 # LLM = a router over a model catalog (claude / codex / ollama local+cloud).
 llm:
-  backends: [claude, codex, ollama]
-  routing:                 # role -> model (cost/capability tiered)
-    triage:        ollama:small         # the wake-tick decision can be cheap
+  think_on_tick: true       # let the tick reason via the LLM (and ask when stuck)
+  routing:                  # role -> "backend:model" (cost/capability tiered)
+    triage:        claude:haiku         # the wake-tick decision can be cheap
     orchestrator:  claude:opus          # deep judgment — frontier only
     red_team:      claude:opus          # self-audit must be sharp
-    fixer:         codex:gpt-5.5
-    researcher:    ollama:qwen-cloud    # high-volume leaf work — cheap
-    summarizer:    ollama:llama-local   # log/area summarization — cheapest
-  fallbacks: [claude:opus, ollama:small]
+    fixer:         codex:gpt-5.5        # code edits
+    researcher:    claude:sonnet        # high-volume leaf work
+    summarizer:    claude:haiku         # log/area summarization — cheapest
+  fallbacks: [claude:opus]              # used when the routed backend is absent/fails
+  aliases:                  # short name -> real model id
+    opus: claude-opus-4-8
+    sonnet: claude-sonnet-4-6
+    haiku: claude-haiku-4-5
+  backends:                 # CLI templates ({model},{prompt}; no {prompt} => prompt on stdin)
+    claude: ["claude","-p","--model","{model}"]
+    codex:  ["codex","exec","--model","{model}","{prompt}"]
+    # ollama: disabled for now (no local ollama on this box; qwen weak). When re-enabling,
+    # deepseek-v4 is the strong pick: ollama: ["ollama","run","{model}","{prompt}"]
 
 memory:
   working:   {kind: redis,    url: redis://localhost:6379/0}
@@ -325,14 +335,56 @@ def tick(cfg) -> dict:
                 "who": who, "rung": rung, "action": action, "mode": mode,
                 "would_execute": mode != "shadow",
                 "backlog": world.get("_backlog_count", 0)}
+    think(cfg, decision, world)
     # record the tick so the dashboard can show it (best-effort)
     try:
         from jarvis.runtime import record
         record(mode=f"tick/{rung}", target=action[:60], pool="kernel",
-               status="would" if mode == "shadow" else "ok")
+               model=decision.get("model", "-"),
+               status="would" if mode == "shadow" else "ok",
+               thought=decision.get("thought", ""), asked=decision.get("asked", ""))
     except Exception:
         pass
     return decision
+
+def think(cfg, decision, world):
+    """The 'mind' pass: reason about the decision via the LLM router; if the model can't
+    proceed without info only the owner has, ask through the dashboard. Degrades to no-op."""
+    if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
+        return
+    try:
+        from jarvis.adapters.llm import build_llm
+        from jarvis import messaging
+    except Exception:
+        return
+    llm = build_llm(cfg)
+    if not llm:
+        return
+    recurring = [r.get("sig") for r in world.get("_ledger", {}).get("recurring", [])][:3]
+    prompt = (
+        f"You are {cfg['identity']['name']}, an autonomous ops agent, on a {decision['mode']} tick.\n"
+        f"You triaged to rung={decision['rung']} -> action: {decision['action']}.\n"
+        f"Open backlog items: {world.get('_backlog_count', 0)}. Recurring issues in memory: {recurring}.\n\n"
+        "In 2-3 sentences, say whether this is the right next move and the concrete first step.\n"
+        "If you genuinely cannot proceed safely without information only the owner has, INSTEAD reply with "
+        "exactly one line starting 'QUESTION: ' followed by your question."
+    )
+    try:
+        out = llm.run("triage", prompt, timeout=120).strip()
+    except Exception as e:
+        decision["thought"] = f"(no LLM: {str(e)[:80]})"
+        return
+    decision["model"] = (cfg.get("llm", {}).get("routing", {}) or {}).get("triage", "")
+    if out.upper().startswith("QUESTION:"):
+        q = out.split(":", 1)[1].strip()
+        decision["asked"] = q
+        decision["thought"] = f"stuck -> asked owner: {q}"
+        try:
+            messaging.post_question(q, ref=decision["action"][:60])
+        except Exception:
+            pass
+    else:
+        decision["thought"] = out[:600]
 
 def main():
     cfg = load()
@@ -352,21 +404,67 @@ EOF
 """Pluggable adapters: nothing infra-specific lives in the kernel core."""
 EOF
   gen jarvis/adapters/llm.py <<'EOF'
-"""LLM provider adapter = a router over a model catalog (claude/codex/ollama).
-Generalizes ai-exec: role -> model, with cost/capability tiering + fallbacks."""
-from abc import ABC, abstractmethod
+"""LLM provider router (the mind): role -> "backend:model", dispatched to a CLI backend.
+Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prompt}; no
+{prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
+falls through to `fallbacks`. Stdlib only."""
+from __future__ import annotations
+import shutil, subprocess
 
-class LLM(ABC):
-    @abstractmethod
-    def run(self, role: str, prompt: str, **kw) -> str: ...
+DEFAULT_BACKENDS = {
+    "claude": ["claude", "-p", "--model", "{model}"],
+    "codex":  ["codex", "exec", "--model", "{model}", "{prompt}"],
+    "ollama": ["ollama", "run", "{model}", "{prompt}"],
+}
 
-class RoutingLLM(LLM):
-    def __init__(self, routing: dict, backends: dict):
-        self.routing, self.backends = routing, backends
-    def run(self, role: str, prompt: str, **kw) -> str:
-        target = self.routing.get(role) or self.routing.get("triage")
-        # TODO: dispatch target ("backend:model") to the right CLI backend.
-        raise NotImplementedError(f"route {role} -> {target}")
+class RoutingLLM:
+    def __init__(self, routing, backends, aliases, fallbacks):
+        self.routing = routing or {}
+        self.backends = backends or DEFAULT_BACKENDS
+        self.aliases = aliases or {}
+        self.fallbacks = fallbacks or []
+
+    def _resolve(self, target):
+        backend, _, model = (target or "").partition(":")
+        return backend, self.aliases.get(model, model)
+
+    def _present(self, backend):
+        cmd = self.backends.get(backend)
+        return bool(cmd) and shutil.which(cmd[0]) is not None
+
+    def _invoke(self, backend, model, prompt, timeout):
+        cmd = [a.replace("{model}", model) for a in self.backends[backend]]
+        stdin = None
+        if any("{prompt}" in a for a in cmd):
+            cmd = [a.replace("{prompt}", prompt) for a in cmd]
+        else:
+            stdin = prompt
+        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
+        if p.returncode != 0:
+            raise RuntimeError((p.stderr or p.stdout or "nonzero").strip()[:200])
+        return p.stdout.strip()
+
+    def run(self, role, prompt, timeout=120):
+        targets, tried = [], []
+        if self.routing.get(role):
+            targets.append(self.routing[role])
+        targets += [f for f in self.fallbacks if f not in targets]
+        for target in targets:
+            backend, model = self._resolve(target)
+            if not self._present(backend):
+                tried.append(f"{backend}:absent"); continue
+            try:
+                return self._invoke(backend, model, prompt, timeout)
+            except Exception as e:
+                tried.append(f"{backend}:{str(e)[:50]}")
+        raise RuntimeError(f"no usable LLM backend for role '{role}' (tried: {tried})")
+
+def build_llm(cfg):
+    llm = cfg.get("llm") or {}
+    if not llm:
+        return None
+    return RoutingLLM(llm.get("routing"), llm.get("backends"),
+                      llm.get("aliases"), llm.get("fallbacks"))
 EOF
   gen jarvis/adapters/memory.py <<'EOF'
 """Memory adapter interface. Tiers wired in jarvis/memory/tiers.py."""
@@ -543,7 +641,8 @@ up(){   [ -f "$ROOT/.env" ] || { cp "$ROOT/.env.example" "$ROOT/.env"; warn "cre
         docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)"; }
 down(){ docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
 
-breathe(){ log "one shadow-mode tick:"; python3 "$ROOT/jarvis/kernel.py"; }
+pybin(){ [ -x "$ROOT/.venv/bin/python" ] && echo "$ROOT/.venv/bin/python" || echo python3; }
+breathe(){ log "one tick:"; "$(pybin)" "$ROOT/jarvis/kernel.py"; }
 
 venv(){ [ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv" >/dev/null 2>&1; echo "$ROOT/.venv"; }
 skill_cmd(){
@@ -572,7 +671,7 @@ case "${1:-scaffold}" in
   down)     down;;
   breathe)  breathe;;
   skill)    shift; skill_cmd "$@";;
-  dashboard) shift; python3 "$ROOT/jarvis/dashboard/server.py" "$@";;
+  dashboard) shift; "$(pybin)" "$ROOT/jarvis/dashboard/server.py" "$@";;
   doctor)   doctor;;
   *) die "unknown subcommand '$1' (scaffold|deps|initdb|up|down|breathe|doctor)";;
 esac

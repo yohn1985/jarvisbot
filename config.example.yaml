@@ -14,15 +14,24 @@ action_classes:
 
 # LLM = a router over a model catalog (claude / codex / ollama local+cloud).
 llm:
-  backends: [claude, codex, ollama]
-  routing:                 # role -> model (cost/capability tiered)
-    triage:        ollama:small         # the wake-tick decision can be cheap
+  think_on_tick: true       # let the tick reason via the LLM (and ask when stuck)
+  routing:                  # role -> "backend:model" (cost/capability tiered)
+    triage:        claude:haiku         # the wake-tick decision can be cheap
     orchestrator:  claude:opus          # deep judgment — frontier only
     red_team:      claude:opus          # self-audit must be sharp
-    fixer:         codex:gpt-5.5
-    researcher:    ollama:qwen-cloud    # high-volume leaf work — cheap
-    summarizer:    ollama:llama-local   # log/area summarization — cheapest
-  fallbacks: [claude:opus, ollama:small]
+    fixer:         codex:gpt-5.5        # code edits
+    researcher:    claude:sonnet        # high-volume leaf work
+    summarizer:    claude:haiku         # log/area summarization — cheapest
+  fallbacks: [claude:opus]              # used when the routed backend is absent/fails
+  aliases:                  # short name -> real model id
+    opus: claude-opus-4-8
+    sonnet: claude-sonnet-4-6
+    haiku: claude-haiku-4-5
+  backends:                 # CLI templates ({model},{prompt}; no {prompt} => prompt on stdin)
+    claude: ["claude","-p","--model","{model}"]
+    codex:  ["codex","exec","--model","{model}","{prompt}"]
+    # ollama: disabled for now (no local ollama on this box; qwen weak). When re-enabling,
+    # deepseek-v4 is the strong pick: ollama: ["ollama","run","{model}","{prompt}"]
 
 memory:
   working:   {kind: redis,    url: redis://localhost:6379/0}

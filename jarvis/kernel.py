@@ -59,14 +59,56 @@ def tick(cfg) -> dict:
                 "who": who, "rung": rung, "action": action, "mode": mode,
                 "would_execute": mode != "shadow",
                 "backlog": world.get("_backlog_count", 0)}
+    think(cfg, decision, world)
     # record the tick so the dashboard can show it (best-effort)
     try:
         from jarvis.runtime import record
         record(mode=f"tick/{rung}", target=action[:60], pool="kernel",
-               status="would" if mode == "shadow" else "ok")
+               model=decision.get("model", "-"),
+               status="would" if mode == "shadow" else "ok",
+               thought=decision.get("thought", ""), asked=decision.get("asked", ""))
     except Exception:
         pass
     return decision
+
+def think(cfg, decision, world):
+    """The 'mind' pass: reason about the decision via the LLM router; if the model can't
+    proceed without info only the owner has, ask through the dashboard. Degrades to no-op."""
+    if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
+        return
+    try:
+        from jarvis.adapters.llm import build_llm
+        from jarvis import messaging
+    except Exception:
+        return
+    llm = build_llm(cfg)
+    if not llm:
+        return
+    recurring = [r.get("sig") for r in world.get("_ledger", {}).get("recurring", [])][:3]
+    prompt = (
+        f"You are {cfg['identity']['name']}, an autonomous ops agent, on a {decision['mode']} tick.\n"
+        f"You triaged to rung={decision['rung']} -> action: {decision['action']}.\n"
+        f"Open backlog items: {world.get('_backlog_count', 0)}. Recurring issues in memory: {recurring}.\n\n"
+        "In 2-3 sentences, say whether this is the right next move and the concrete first step.\n"
+        "If you genuinely cannot proceed safely without information only the owner has, INSTEAD reply with "
+        "exactly one line starting 'QUESTION: ' followed by your question."
+    )
+    try:
+        out = llm.run("triage", prompt, timeout=120).strip()
+    except Exception as e:
+        decision["thought"] = f"(no LLM: {str(e)[:80]})"
+        return
+    decision["model"] = (cfg.get("llm", {}).get("routing", {}) or {}).get("triage", "")
+    if out.upper().startswith("QUESTION:"):
+        q = out.split(":", 1)[1].strip()
+        decision["asked"] = q
+        decision["thought"] = f"stuck -> asked owner: {q}"
+        try:
+            messaging.post_question(q, ref=decision["action"][:60])
+        except Exception:
+            pass
+    else:
+        decision["thought"] = out[:600]
 
 def main():
     cfg = load()
