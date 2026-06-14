@@ -49,8 +49,22 @@ class RoutingLLM:
         return p.stdout.strip()
 
     def _invoke_http(self, spec, model, prompt, timeout):
-        """OpenAI-compatible chat completion (covers Ollama Cloud + any OpenAI-style endpoint)."""
+        """HTTP chat backend: OpenAI-compatible by default (Ollama Cloud, OpenAI, OpenRouter, ...),
+        or the Anthropic Messages API when spec.format == 'anthropic'."""
         key = os.environ.get(spec.get("api_key_env", ""), "")
+        if spec.get("format") == "anthropic":
+            body = json.dumps({"model": model, "max_tokens": 1024,
+                               "messages": [{"role": "user", "content": prompt}]}).encode()
+            headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+            if key:
+                headers["x-api-key"] = key
+            req = urllib.request.Request(spec["http"], data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.load(r)
+            text = "".join(p.get("text", "") for p in (data.get("content") or []) if isinstance(p, dict)).strip()
+            if not text:
+                raise RuntimeError("empty response from Anthropic backend")
+            return text
         body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
                            "stream": False}).encode()
         headers = {"Content-Type": "application/json"}

@@ -172,9 +172,10 @@ function renderModels(list){
       h+='<div style="margin:4px 0"><span class="skok">✓ connected</span></div>'+
          '<button type="button" class="bigbtn" onclick="useMain(\''+esc(m.id)+'\')">Use as main brain</button>';
     } else {
-      h+='<div style="color:var(--dim);font-size:12px;margin:4px 0">'+esc(m.how)+'</div>';
-      if(m.field) h+='<div class="ansrow" style="margin-top:8px"><input id="md-'+m.id+'" type="password" placeholder="paste '+(m.field==='token'?'token':'key')+'…" value="'+esc(modelDraft[m.id]||'')+'" oninput="modelDraft[\''+m.id+'\']=this.value"/>'+
-         '<button type="button" class="bigbtn" onclick="connectModel(\''+esc(m.id)+'\')">Connect</button></div>';
+      h+='<div style="color:var(--dim);font-size:12px;margin:6px 0">Step 1 — get your key, Step 2 — paste it, Step 3 — Connect.</div>';
+      if(m.get) h+='<button type="button" class="choice" onclick="window.open(\''+m.get+'\',\'_blank\')">① Get my key →</button>';
+      h+='<div class="ansrow" style="margin-top:8px"><input id="md-'+m.id+'" type="password" placeholder="② paste key here…" value="'+esc(modelDraft[m.id]||'')+'" oninput="modelDraft[\''+m.id+'\']=this.value"/>'+
+         '<button type="button" class="bigbtn" onclick="connectModel(\''+esc(m.id)+'\')">③ Connect</button></div>';
     }
     h+='</div>';
   }

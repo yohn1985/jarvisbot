@@ -261,11 +261,52 @@ def _set_main_brain(target):
     p.write_text(yaml.safe_dump(data, sort_keys=False))
 
 
-_MAIN_TARGET = {"claude": "claude:opus", "codex": "codex:gpt-5.5", "ollama": "ollama_cloud:deepseek-v4-pro"}
+_MAIN_TARGET = {"openai": "openai:gpt-4o", "anthropic": "anthropic:claude-opus-4-8",
+                "ollama": "ollama_cloud:deepseek-v4-pro"}
+
+# Frontier brains connected by pasting an API key (no terminal): HTTP endpoint + key env + model.
+_FRONTIER = {
+    "openai":    {"url": "https://api.openai.com/v1/chat/completions", "env": "OPENAI_API_KEY",
+                  "model": "gpt-4o", "fmt": None},
+    "anthropic": {"url": "https://api.anthropic.com/v1/messages", "env": "ANTHROPIC_API_KEY",
+                  "model": "claude-opus-4-8", "fmt": "anthropic"},
+}
+
+
+def _wire_frontier(prov):
+    """Add the provider's HTTP backend and make it the MAIN brain (agents stay on the cheap tier)."""
+    import yaml
+    c = _FRONTIER[prov]
+    p = ROOT / "config.yaml"
+    data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
+    llm = data.setdefault("llm", {})
+    spec = {"http": c["url"], "api_key_env": c["env"]}
+    if c["fmt"]:
+        spec["format"] = c["fmt"]
+    llm.setdefault("backends", {})[prov] = spec
+    target = f"{prov}:{c['model']}"
+    routing = llm.setdefault("routing", {})
+    routing["orchestrator"], routing["red_team"] = target, target
+    p.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _verify_main(cfg):
+    """Probe the MAIN brain (orchestrator) specifically with NO fallback, so a bad key/model fails
+    loudly instead of a cheap fallback masking it."""
+    from jarvis.adapters.llm import build_llm
+    llm = build_llm(cfg)
+    if not llm:
+        return False, "no brain configured"
+    llm.fallbacks = []                      # verify the actual main backend, not a fallback
+    try:
+        out = llm.run("orchestrator", "Reply with exactly: OK", timeout=45)
+        return ("ok" in (out or "").lower()), (out or "")[:140]
+    except Exception as e:
+        return False, str(e)[:180]
 
 
 def _models():
-    """Model cards for the MODELS tab: which brains are connected + which is the main brain."""
+    """MODELS cards — connect a brain by pasting an API key (no terminal). 'get' opens the key page."""
     cfg = {}
     try:
         from jarvis.config import load
@@ -273,19 +314,16 @@ def _models():
     except Exception:
         pass
     main = ((cfg.get("llm", {}) or {}).get("routing", {}) or {}).get("orchestrator", "")
-    home = Path(os.path.expanduser("~"))
-    claude_conn = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-                       or (home / ".claude" / ".credentials.json").exists())
     return [
-        {"id": "claude", "name": "Claude (Anthropic)", "tier": "frontier", "field": "token",
-         "connected": claude_conn, "is_main": main.startswith("claude"),
-         "how": "Run `claude setup-token` where you're logged into Claude, then paste the token."},
-        {"id": "codex", "name": "Codex (OpenAI / ChatGPT)", "tier": "frontier", "field": "token",
-         "connected": (home / ".codex" / "auth.json").exists(), "is_main": main.startswith("codex"),
-         "how": "Run `codex login` on this machine, OR paste an access token (uses codex login --with-access-token)."},
-        {"id": "ollama", "name": "Ollama Cloud (DeepSeek)", "tier": "agent / cheap", "field": "key",
-         "connected": bool(os.environ.get("OLLAMA_API_KEY")), "is_main": main.startswith("ollama"),
-         "how": "Paste your Ollama Cloud API key (subscription pricing)."},
+        {"id": "openai", "name": "OpenAI (GPT)", "tier": "frontier", "field": "key",
+         "get": "https://platform.openai.com/api-keys",
+         "connected": bool(os.environ.get("OPENAI_API_KEY")), "is_main": main.startswith("openai")},
+        {"id": "anthropic", "name": "Claude (Anthropic)", "tier": "frontier", "field": "key",
+         "get": "https://console.anthropic.com/settings/keys",
+         "connected": bool(os.environ.get("ANTHROPIC_API_KEY")), "is_main": main.startswith("anthropic")},
+        {"id": "ollama", "name": "Ollama Cloud — cheap, recommended", "tier": "cheap", "field": "key",
+         "get": "https://ollama.com/settings/keys",
+         "connected": bool(os.environ.get("OLLAMA_API_KEY")), "is_main": main.startswith("ollama")},
     ]
 
 
@@ -442,27 +480,17 @@ class H(BaseHTTPRequestHandler):
                 from jarvis.bootstrap import secrets
                 from jarvis.config import load
                 from jarvis.bootstrap import preflight
-                if prov == "claude":                       # subscription via setup-token -> MAIN brain
+                if prov in _FRONTIER:                       # paste an API key -> wire as MAIN brain
                     if not key:
-                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
-                    secrets.set_secret("CLAUDE_CODE_OAUTH_TOKEN", key)
-                    _set_main_brain("claude:opus")
-                    ok, detail = preflight.recheck_brain(load())
-                    return self._send(200, json.dumps({"ok": ok, "detail": detail}))
-                if prov == "codex":                        # subscription via access token -> MAIN brain
-                    import shutil as _sh, subprocess as _sp
-                    if not key:
-                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
-                    if not _sh.which("codex"):
-                        return self._send(400, json.dumps({"ok": False, "error": "codex CLI isn't installed on this machine yet"}))
-                    try:
-                        _sp.run(["codex", "login", "--with-access-token"], input=key,
-                                capture_output=True, text=True, timeout=30)
-                    except Exception as e:
-                        return self._send(500, json.dumps({"ok": False, "error": str(e)[:160]}))
-                    _set_main_brain("codex:gpt-5.5")
-                    ok, detail = preflight.recheck_brain(load())
-                    return self._send(200, json.dumps({"ok": ok, "detail": detail}))
+                        return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
+                    secrets.set_secret(_FRONTIER[prov]["env"], key)
+                    secrets.load_env()
+                    _wire_frontier(prov)
+                    ok, detail = _verify_main(load())       # probe the new main brain specifically
+                    if ok:
+                        return self._send(200, json.dumps({"ok": True, "detail": f"Connected — {prov} is now the main brain."}))
+                    return self._send(200, json.dumps({"ok": False,
+                        "detail": f"Key saved but couldn't get a reply (check the key): {detail}"}))
                 if prov == "ollama":
                     if key:
                         secrets.set_secret("OLLAMA_API_KEY", key)
