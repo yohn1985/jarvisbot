@@ -10,7 +10,7 @@ configured brain. Network-device discovery + persisting into the knowledge table
     python skill.py [--print]
 """
 from __future__ import annotations
-import argparse, platform, socket, subprocess, sys, time
+import argparse, concurrent.futures, ipaddress, platform, socket, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +46,80 @@ def scan_host() -> dict:
     return facts
 
 
+_COMMON_PORTS = [22, 53, 80, 135, 139, 443, 445, 2049, 3000, 3001, 3306, 5000,
+                 5432, 6379, 8000, 8080, 8443, 8787, 9000, 9090, 11434]
+
+
+def _is_ip(s):
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except Exception:
+        return False
+
+
+def _neighbours():
+    out = _run(["sh", "-c", "ip neigh 2>/dev/null"], 4000)
+    return {p[0] for p in (l.split() for l in out.splitlines()) if p and _is_ip(p[0])}
+
+
+def _local_subnets():
+    out = _run(["sh", "-c", "ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}'"], 500)
+    nets = []
+    for cidr in out.split():
+        try:
+            nets.append(ipaddress.ip_interface(cidr).network)
+        except Exception:
+            pass
+    return nets
+
+
+def _port_open(host, port, timeout=0.3):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        r = s.connect_ex((host, port))
+        s.close()
+        return r == 0
+    except Exception:
+        return False
+
+
+def scan_network(max_hosts=256):
+    """Bounded, threaded sweep: ARP neighbours first, then fill from local /24-ish subnets. Returns
+    {host: [open ports]}. Noisy-ish, so it's opt-in (--network / consent-gated in the loop)."""
+    targets = list(_neighbours())
+    for net in _local_subnets():
+        if net.num_addresses <= 1024:
+            for ip in net.hosts():
+                s = str(ip)
+                if s not in targets:
+                    targets.append(s)
+                if len(targets) >= max_hosts:
+                    break
+        if len(targets) >= max_hosts:
+            break
+    targets = targets[:max_hosts]
+
+    def _scan(h):
+        return h, [p for p in _COMMON_PORTS if _port_open(h, p)]
+
+    found = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=120) as ex:
+        for h, ports in ex.map(_scan, targets):
+            if ports:
+                found[h] = ports
+    return found
+
+
+def write_index(out_dir: Path):
+    """Regenerate INDEX.md linking to every discovery doc — Jarvis's own table of contents."""
+    docs = sorted((p for p in out_dir.glob("*.md") if p.name != "INDEX.md"), reverse=True)
+    lines = ["# Jarvis Knowledge — Discovery Index", f"_updated {time.strftime('%Y-%m-%d %H:%M:%S')}_", ""]
+    lines += [f"- [{p.stem}]({p.name})" for p in docs] or ["_(nothing discovered yet)_"]
+    (out_dir / "INDEX.md").write_text("\n".join(lines) + "\n")
+
+
 def organize(llm, facts: dict) -> str:
     blob = "\n\n".join(f"## {k}\n{v}" for k, v in facts.items() if v and not v.startswith("(unavailable"))
     prompt = (
@@ -63,6 +137,7 @@ def organize(llm, facts: dict) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--print", action="store_true", help="also print the document")
+    ap.add_argument("--network", action="store_true", help="also sweep the local subnet for devices/ports")
     a = ap.parse_args()
     cfg = load()
     llm = build_llm(cfg)
@@ -71,6 +146,13 @@ def main():
 
     print("[discover] scanning host...", file=sys.stderr)
     facts = scan_host()
+    if a.network:
+        print("[discover] scanning local network (bounded)...", file=sys.stderr)
+        net = scan_network()
+        facts["network_scan"] = "\n".join(
+            f"{h}: ports {', '.join(map(str, ports))}"
+            for h, ports in sorted(net.items(), key=lambda kv: ipaddress.ip_address(kv[0]))
+        ) or "(no responsive hosts/ports found)"
     print("[discover] organizing with the brain...", file=sys.stderr)
     doc = organize(llm, facts)
 
@@ -79,7 +161,8 @@ def main():
     host = facts.get("hostname", "host")
     path = out_dir / f"{host}-{time.strftime('%Y%m%d-%H%M%S')}.md"
     path.write_text(f"# Discovery: {host}\n_generated {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{doc}\n")
-    print(f"[discover] wrote {path}")
+    write_index(out_dir)
+    print(f"[discover] wrote {path} (+ INDEX.md)")
     if a.print:
         print("\n" + doc)
 

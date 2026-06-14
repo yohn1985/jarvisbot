@@ -75,11 +75,48 @@ def tick(cfg) -> dict:
         pass
     return decision
 
+def _explore(cfg, decision):
+    """Autonomous curiosity: periodically (re)discover + organize the environment, then say so.
+    Discovery is read-only (investigate class), so this runs even in shadow. Staleness-gated via
+    state/explore.json so it doesn't re-scan every wake."""
+    import json, subprocess, time as _t
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    marker = root / "state" / "explore.json"
+    interval = int((cfg.get("explore", {}) or {}).get("interval_seconds", 21600))   # default 6h
+    try:
+        last = json.loads(marker.read_text()).get("ts", 0)
+    except Exception:
+        last = 0
+    if _t.time() - last < interval:
+        decision["thought"] = (decision.get("thought", "") + " (explored recently — skipping)").strip()
+        return
+    py = root / ".venv" / "bin" / "python"
+    py = str(py) if py.exists() else "python3"
+    try:
+        subprocess.run([py, str(root / "skills" / "discover" / "skill.py"), "--network"],
+                       capture_output=True, text=True, timeout=300, cwd=str(root))
+        marker.parent.mkdir(exist_ok=True)
+        marker.write_text(json.dumps({"ts": _t.time()}))
+        decision["worker"] = "discover(--network) [ran]"
+        try:
+            from jarvis import messaging
+            messaging.post_note("I explored my environment and refreshed my notes — see the KNOWLEDGE tab.",
+                                conv="activity", title="Activity")
+        except Exception:
+            pass
+    except Exception as e:
+        decision["worker"] = f"(explore failed: {str(e)[:60]})"
+
+
 def act(cfg, decision, world):
     """Route the decided rung to a worker — Jarvis's hands. The runner enforces propose-only:
     it only executes when mode!=shadow AND the worker's action_class is 'allow'; otherwise it
     records the INTENT. So this is always safe to call."""
     rung = decision["rung"]
+    if rung == "p5_curiosity":          # autonomous discovery + documentation (read-only)
+        _explore(cfg, decision)
+        return
     backlog = world.get("needs_human_backlog") or []
     plan = {
         "p3_needs_human_backlog":    ("deep_fix", backlog[0] if backlog else None),

@@ -78,8 +78,10 @@ def _discovery():
     d = ROOT / "workspace" / "discovery"
     if not d.exists():
         return []
+    paths = sorted(d.glob("*.md"), reverse=True)
+    paths = [p for p in paths if p.name == "INDEX.md"] + [p for p in paths if p.name != "INDEX.md"]
     out = []
-    for p in sorted(d.glob("*.md"), reverse=True):
+    for p in paths:
         try:
             out.append({"name": p.name, "content": p.read_text()})
         except Exception:

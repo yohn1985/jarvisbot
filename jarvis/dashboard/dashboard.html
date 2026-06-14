@@ -92,6 +92,7 @@
   .kbody .mdtable{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px 12px; overflow-x:auto; font-size:11px; color:var(--txt); }
   .kbody ul{ margin:4px 0 8px; padding-left:20px; } .kbody li{ margin:3px 0; }
   .kbody .sp{ height:6px; }
+  .mdlink{ color:var(--grntxt); cursor:pointer; text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -150,7 +151,8 @@ function md(t){
   const ft=()=>{ if(inTable){h+='<pre class="mdtable">'+esc(tbuf.join('\n'))+'</pre>';tbuf=[];inTable=false;} };
   for(const raw of lines){
     if(raw.trim().startsWith('|')){ inTable=true; tbuf.push(raw); continue; } ft();
-    const l=esc(raw).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+?)`/g,'<code>$1</code>');
+    const l=esc(raw).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+?)`/g,'<code>$1</code>')
+      .replace(/\[([^\]]+)\]\(([^)]+\.md)\)/g,'<a class="mdlink" onclick="selectDocByName(\'$2\')">$1</a>');
     if(/^#### /.test(raw)){ fl(); h+='<h4>'+l.slice(5)+'</h4>'; }
     else if(/^### /.test(raw)){ fl(); h+='<h4>'+l.slice(4)+'</h4>'; }
     else if(/^## /.test(raw)){ fl(); h+='<h3>'+l.slice(3)+'</h3>'; }
@@ -162,7 +164,8 @@ function md(t){
   }
   fl(); ft(); return h;
 }
-function selectDoc(i){ knowledgeSel=i; renderKnowledge(knowledgeDocs); }
+function selectDoc(i){ knowledgeSel=i; _kwSig=''; renderKnowledge(knowledgeDocs); }
+function selectDocByName(n){ const i=knowledgeDocs.findIndex(d=>d.name===n); if(i>=0) selectDoc(i); }
 function renderKnowledge(docs){
   knowledgeDocs=docs||[]; const el=document.getElementById('knowledge');
   const sig=JSON.stringify(knowledgeDocs.map(d=>d.name))+':'+knowledgeSel;
