@@ -12,7 +12,7 @@ Open-source-clean: no infra-specific anything; reads only Jarvis's own state + c
 Meant to be the foundation an outsourced front-end can iterate on (the /api/* JSON is stable).
 """
 from __future__ import annotations
-import argparse, json, os, signal, subprocess, sys
+import argparse, json, os, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -73,6 +73,48 @@ def _procs():
     return procs
 
 
+# --- bootstrap setup (the dashboard's guided checklist) ---
+_EXEC = {"running": False, "last": None}
+_EXEC_LOCK = threading.Lock()
+
+
+def _setup_state():
+    """One simple snapshot the UI uses to show the next thing for the owner to do."""
+    try:
+        from jarvis.config import load
+        from jarvis.bootstrap import preflight, installer
+        cfg = load()
+        st = preflight.status(cfg)
+        plan = installer.plan(cfg)
+        return {"ready": st["ready"], "checks": st["checks"], "plan": plan,
+                "running": _EXEC["running"], "last": _EXEC["last"],
+                "complete": st["ready"] and not plan}
+    except Exception as e:
+        return {"error": str(e)[:200], "checks": [], "plan": [], "running": False, "complete": False}
+
+
+def _approve(ids):
+    """Run the approved install actions in a background thread so the request returns at once;
+    progress streams into the RUNS feed the page already polls."""
+    with _EXEC_LOCK:
+        if _EXEC["running"]:
+            return {"started": False, "error": "install already running"}
+        _EXEC["running"] = True
+
+    def _run():
+        try:
+            from jarvis.config import load
+            from jarvis.bootstrap import executor
+            _EXEC["last"] = executor.execute(load(), approved_ids=ids, interactive=False)
+        except Exception as e:
+            _EXEC["last"] = {"error": str(e)[:200]}
+        finally:
+            _EXEC["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"started": True}
+
+
 class H(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json"):
         b = body.encode() if isinstance(body, str) else body
@@ -95,6 +137,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_config()))
         if u.path == "/api/procs":
             return self._send(200, json.dumps(_procs()))
+        if u.path == "/api/setup":
+            return self._send(200, json.dumps(_setup_state()))
         if u.path == "/api/conversations":
             return self._send(200, json.dumps(_conversations()))
         if u.path == "/api/messages":
@@ -121,6 +165,9 @@ class H(BaseHTTPRequestHandler):
             (ROOT / "state").mkdir(exist_ok=True)
             (ROOT / "state" / "wake").touch()
             return self._send(200, json.dumps({"ok": True, "woke": True}))
+        if u.path == "/api/approve":
+            ids = body.get("ids")
+            return self._send(200, json.dumps(_approve(ids)))
         try:
             from jarvis import messaging
             if u.path == "/api/answer":

@@ -266,6 +266,9 @@ def _plan_semantic(d, cfg):
     if not spec:
         return [_action(d, id="semantic", desc=f"Set up semantic/vector memory ('{kind}')", cmd=[],
                         blocked=True, reason=f"no install command known for semantic kind '{kind}'")]
+    installed = d["venv_installed"]
+    if installed is not None and all(_norm(s) in installed for s in spec):
+        return []                          # already installed -> idempotent
     return [_action(d, id="semantic", desc=f"Install vector/semantic memory deps ({', '.join(spec)})",
                     cmd=[_venv_py(), "-m", "pip", "install"] + spec)]
 

@@ -150,6 +150,21 @@ def _resolve(key: str, label: str, st: dict) -> bool:
     return True
 
 
+def status(cfg: dict) -> dict:
+    """Read-only snapshot of the requirement checks — no asking, no state writes. For the
+    dashboard setup checklist."""
+    checks, ready = [], True
+    for key, label, required, check_fn, _ in REQUIREMENTS:
+        try:
+            ok, detail = check_fn(cfg)
+        except Exception as e:
+            ok, detail = False, f"check error: {str(e)[:80]}"
+        checks.append({"key": key, "label": label, "required": required, "ok": ok, "detail": detail})
+        if required and not ok:
+            ready = False
+    return {"ready": ready, "checks": checks}
+
+
 def run(cfg: dict) -> dict:
     st = _load_state()
     checks, asked, resolved, ready = [], [], [], True
