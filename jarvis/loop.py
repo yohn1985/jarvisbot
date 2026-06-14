@@ -14,9 +14,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 STATE = ROOT / "state"
 WAKE = STATE / "wake"          # touch to wake immediately (alert webhook / owner)
+SETUP_DELAY = 60               # while waiting on the owner for setup, re-check this often
 
 from jarvis.config import load
 from jarvis import kernel
+from jarvis.bootstrap import preflight
 
 
 def next_delay(cfg: dict, decision: dict) -> int:
@@ -62,11 +64,20 @@ def run(once: bool = False):
             time.sleep(5)
             continue
         try:
-            decision = kernel.tick(cfg)
+            pf = preflight.run(cfg)          # Phase 0 (no AI): ask the owner for whatever's missing
+            if not pf["ready"]:
+                missing = ", ".join(c["label"] for c in pf["checks"] if c["required"] and not c["ok"])
+                decision = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "rung": "setup", "setup": True}
+                from jarvis.runtime import record
+                record(mode="setup", target=f"awaiting setup: {missing}", pool="bootstrap",
+                       status="would", note=("asked:" + ",".join(pf["asked"])) if pf["asked"] else "waiting")
+            else:
+                decision = kernel.tick(cfg)
         finally:
             wm.unlock("tick")
-        delay = next_delay(cfg, decision)
-        print(f"[jarvis] tick {decision['ts']} rung={decision['rung']} -> next wake in {delay}s")
+        delay = SETUP_DELAY if decision.get("setup") else next_delay(cfg, decision)
+        label = "setup" if decision.get("setup") else "tick"
+        print(f"[jarvis] {label} {decision['ts']} rung={decision.get('rung')} -> next wake in {delay}s")
         if once:
             return decision
         waited = 0
