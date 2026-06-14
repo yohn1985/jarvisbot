@@ -8,6 +8,9 @@
   :root{ --bg:#0c0f0d; --panel:#11150f; --line:#1d2a1d; --txt:#c8d6c4; --dim:#6f7e6b;
          --grn:#3fae5a; --grnpill:#16301c; --grntxt:#7fe39a; --amber:#d8a13a; --red:#d85a5a; }
   *{ box-sizing:border-box; }
+  *{ scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+  *::-webkit-scrollbar{ width:8px; height:8px; } *::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+  *::-webkit-scrollbar-track{ background:transparent; } *::-webkit-scrollbar-corner{ background:transparent; }
   body{ margin:0; background:var(--bg); color:var(--txt); font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
   header{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); }
   header .title{ letter-spacing:2px; color:var(--grntxt); font-weight:600; }
@@ -27,6 +30,14 @@
   .kill{ color:var(--red); border:1px solid #3a1f1f; background:none; padding:1px 7px; border-radius:3px; cursor:pointer; font-size:11px; }
   .cfg{ display:grid; grid-template-columns:200px 1fr; gap:6px 18px; }
   .cfg .k{ color:var(--dim); } .cfg pre{ margin:0; color:var(--txt); white-space:pre-wrap; }
+  .cfg2{ display:grid; grid-template-columns:160px 1fr; gap:8px 18px; align-items:center; }
+  .cfg2 .k{ color:var(--dim); } .cfg2 input, .cfg2 select{ width:100%; max-width:420px; }
+  select{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:7px 10px; border-radius:5px; font:inherit; }
+  textarea{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:8px 10px; border-radius:5px; font:inherit; }
+  .cfgmsg{ margin-left:10px; font-size:.9em; }
+  .poolrow{ display:flex; gap:8px; max-width:640px; flex-wrap:wrap; align-items:center; } .poolrow > select, .poolrow > input{ flex:1; min-width:90px; }
+  .reason{ display:flex; gap:8px; } .rctl{ display:flex; align-items:center; gap:4px; } .rctl label{ color:var(--dim); font-size:.82em; } .rctl select{ padding:5px 7px; }
+  .ghostbtn{ background:transparent; color:var(--grntxt,#7ee2a8); border:1px solid var(--line); padding:5px 12px; border-radius:5px; cursor:pointer; font:inherit; }
   .card{ border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:14px; background:var(--panel); }
   .card h3{ margin:0 0 10px; color:var(--grntxt); font-size:12px; letter-spacing:1px; font-weight:600; }
   .mode-shadow{ color:var(--amber); } .mode-autonomous{ color:var(--grntxt); }
@@ -50,18 +61,56 @@
   .convtitle{ color:var(--grntxt); font-size:12px; letter-spacing:1px; padding-bottom:10px; border-bottom:1px solid var(--line); margin-bottom:12px; }
   #chatlog{ flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:4px 8px 4px 0; }
   #chatlog::-webkit-scrollbar{ width:8px; } #chatlog::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
-  .msg{ padding:9px 12px; border-radius:7px; max-width:78%; white-space:pre-wrap; }
-  .msg.jarvis{ background:var(--panel); border:1px solid var(--line); align-self:flex-start; }
-  .msg.owner{ background:#10241a; border:1px solid #1d3a2a; align-self:flex-end; }
+  .row{ display:flex; flex-direction:column; gap:2px; max-width:100%; }
+  .row.orow{ align-items:flex-end; } .row.jrow{ align-items:flex-start; }
+  .row .ts{ color:var(--dim); font-size:10px; padding:0 4px; }
+  .msg{ padding:9px 12px; border-radius:12px; max-width:78%; white-space:pre-wrap; }
+  .msg.jarvis{ background:transparent; border:none; max-width:100%; padding:2px 2px; white-space:normal; }
+  .msg.owner{ background:rgba(255,255,255,.06); border:1px solid var(--line); }
   .msg .who{ color:var(--dim); font-size:10px; letter-spacing:1px; margin-bottom:3px; }
   .msg.q{ border-color:#3a3320; background:#1a1710; }
   .msg.q .who{ color:var(--amber); }
   .ansrow{ display:flex; gap:6px; margin-top:8px; }
   .ansrow input{ flex:1; }
   input{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:7px 10px; border-radius:5px; font:inherit; }
-  .composer{ display:flex; gap:8px; padding:12px 0 4px; margin-top:8px; border-top:1px solid var(--line); }
-  .composer input{ flex:1; }
+  .composer{ position:relative; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.04); margin:10px auto 6px; }
+  .composer:focus-within{ border-color:#2c4a34; }
+  .composer textarea{ background:transparent; border:none; outline:none; resize:none; color:var(--txt); font:inherit; padding:12px 14px 4px; width:100%; max-height:160px; overflow-y:auto; }
+  .composer textarea::placeholder{ color:var(--dim); }
+  .composer-bar{ display:flex; align-items:center; justify-content:space-between; padding:4px 10px 8px; }
+  .chips{ display:flex; gap:7px; align-items:center; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; color:var(--dim); font-size:11px; }
+  .cdot{ width:7px; height:7px; border-radius:50%; background:var(--grn); display:inline-block; }
+  .sendbtn{ width:34px; height:34px; border-radius:50%; border:none; background:var(--grn); color:#04140a; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:0; box-shadow:0 1px 4px rgba(0,0,0,.35); transition:transform .08s ease, filter .12s ease, background .15s ease; }
+  .sendbtn:hover{ filter:brightness(1.1); } .sendbtn:active{ transform:scale(.92); }
+  .sendbtn svg{ display:block; }
+  .sendbtn.stopping{ background:var(--red); color:#fff; }
+  .composer-actions{ display:flex; gap:8px; align-items:center; }
+  .iconbtn{ background:none; border:none; color:var(--dim); cursor:pointer; font-size:16px; padding:0 2px; }
+  .iconbtn:hover{ color:var(--txt); }
+  .attachstrip{ display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
+  .thumb{ position:relative; display:inline-block; } .thumb img{ width:54px; height:54px; object-fit:cover; border-radius:8px; border:1px solid var(--line); display:block; }
+  .thumb button{ position:absolute; top:-6px; right:-6px; background:var(--red); color:#fff; border:none; border-radius:50%; width:18px; height:18px; cursor:pointer; font-size:11px; line-height:1; padding:0; }
+  .msgimg{ max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); display:block; margin:4px 0; }
+  .slashmenu{ position:absolute; bottom:100%; left:0; margin-bottom:6px; min-width:220px; background:var(--card,#0d1117); border:1px solid var(--line); border-radius:6px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.4); z-index:20; }
+  .slashitem{ padding:7px 12px; cursor:pointer; font-family:monospace; color:var(--grntxt,#7ee2a8); }
+  .slashitem:hover{ background:var(--grnpill,#13251b); }
   .msg{ font-size:13px; }
+  .msg.jarvis{ white-space:normal; }                         /* markdown body controls its own spacing */
+  .mdbody div{ min-height:0; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
+  .mdbody ul{ margin:4px 0; padding-left:20px; } .mdbody code{ background:#0c140d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:12px; }
+  .mdbody a.mdlink{ color:var(--grntxt); cursor:pointer; text-decoration:underline; }
+  .codeblk{ border:1px solid var(--line); border-radius:6px; margin:8px 0; overflow:hidden; background:#0a0e0a; }
+  .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px; background:#0e140e; border-bottom:1px solid var(--line); }
+  .codelang{ color:var(--dim); font-size:11px; letter-spacing:1px; } .copybtn{ background:none; border:1px solid var(--line); color:var(--dim); font-size:10px; padding:1px 8px; border-radius:3px; cursor:pointer; }
+  .copybtn:hover{ color:var(--grntxt); } .codeblk pre{ margin:0; padding:10px 12px; overflow-x:auto; } .codeblk code{ color:#d8e6d4; font-size:12.5px; white-space:pre; }
+  .thought{ margin:2px 0 8px; } .thtoggle{ display:inline-flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:2px 0; color:var(--dim); }
+  .thdot{ width:8px; height:8px; border-radius:50%; background:var(--dim); display:inline-block; } .thlbl{ font-size:12px; color:var(--dim); } .thchev{ font-size:11px; color:var(--dim); }
+  .thbody{ margin:6px 0 0 4px; padding-left:10px; border-left:2px solid var(--line); max-height:280px; overflow-y:auto; }
+  .thbody pre{ margin:0; color:var(--dim); font-style:italic; font-size:12px; white-space:pre-wrap; }
+  .thinking-live{ display:inline-flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; }
+  .pulse{ animation:pulse 1.1s ease-in-out infinite; } @keyframes pulse{ 0%,100%{ opacity:.3 } 50%{ opacity:1 } }
+  .cursor{ color:var(--grntxt); animation:pulse .9s steps(2) infinite; }
   .send,.ansbtn{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:6px 14px; border-radius:5px; cursor:pointer; }
   #setup{ padding:20px 24px; overflow-y:auto; height:100%; }
   #setup .card{ max-width:680px; }
@@ -134,8 +183,21 @@
     <div class="convmain">
       <div id="convtitle" class="convtitle">—</div>
       <div id="chatlog"></div>
-      <div class="composer"><input id="sayinput" placeholder="message Jarvis…" onkeydown="if(event.key==='Enter')say()"/>
-        <button type="button" class="send" onclick="say()">send</button></div>
+      <div class="composer">
+        <div id="slashmenu" class="slashmenu" hidden></div>
+        <div id="attachstrip" class="attachstrip" hidden></div>
+        <textarea id="sayinput" rows="1" autocomplete="off" placeholder="Ask anything…  ( / for skills, 📎 or paste an image )" oninput="onSayInput();autogrow(this)" onkeydown="sayKey(event)" onpaste="onPaste(event)"></textarea>
+        <div class="composer-bar">
+          <div class="chips">
+            <span class="chip"><span class="cdot"></span><span id="chip-model">brain</span></span>
+            <span class="chip" id="chip-mode">shadow</span>
+          </div>
+          <div class="composer-actions">
+            <input type="file" id="fileinput" accept="image/*" multiple hidden onchange="onFiles(this.files);this.value=''"/>
+            <button type="button" class="iconbtn" title="Attach image" onclick="document.getElementById('fileinput').click()">📎</button>
+            <button type="button" id="sendbtn" class="sendbtn" onclick="say()" title="Send"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+          </div>
+        </div></div>
     </div>
   </section>
   <section id="knowledge" hidden></section>
@@ -220,8 +282,26 @@ async function installSkill(name){
   await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
   _skSig=''; load();
 }
+let _cbId=0;
+function codeBlockHTML(b){ const id='cb'+(_cbId++);
+  return `<div class="codeblk"><div class="codebar"><span class="codelang">${esc(b.lang||'code')}</span>`+
+    `<button type="button" class="copybtn" onclick="copyCode('${id}',this)">copy</button></div>`+
+    `<pre id="${id}"><code>${esc(b.code)}</code></pre></div>`; }
+function copyCode(id,btn){ const el=document.getElementById(id); if(!el)return; const txt=el.textContent;
+  const done=()=>{ const o=btn.textContent; btn.textContent='copied'; setTimeout(()=>btn.textContent=o,1200); };
+  if(navigator.clipboard&&navigator.clipboard.writeText&&window.isSecureContext){
+    navigator.clipboard.writeText(txt).then(done).catch(()=>fallbackCopy(txt,done));
+  } else fallbackCopy(txt,done);   // plain HTTP / LAN IP: clipboard API unavailable -> execCommand
+}
+function fallbackCopy(txt,done){ const ta=document.createElement('textarea'); ta.value=txt;
+  ta.style.position='fixed'; ta.style.top='-1000px'; ta.style.opacity='0'; document.body.appendChild(ta);
+  ta.focus(); ta.select(); try{ document.execCommand('copy'); done(); }catch(e){} document.body.removeChild(ta); }
 function md(t){
-  const lines=(t||'').split('\n'); let h='', inList=false, inTable=false, tbuf=[];
+  t=t||'';
+  // pull fenced code blocks out first so ``` contents aren't markdown-processed (restored at the end)
+  const blocks=[];
+  t=t.replace(/```(\w*)\n?([\s\S]*?)```/g,(m,lang,code)=>{ blocks.push({lang,code:code.replace(/\n+$/,'')}); return '@@CB'+(blocks.length-1)+'@@'; });
+  const lines=t.split('\n'); let h='', inList=false, inTable=false, tbuf=[];
   const fl=()=>{ if(inList){h+='</ul>';inList=false;} };
   const ft=()=>{ if(inTable){h+='<pre class="mdtable">'+esc(tbuf.join('\n'))+'</pre>';tbuf=[];inTable=false;} };
   for(const raw of lines){
@@ -237,8 +317,25 @@ function md(t){
     else if(raw.trim()===''){ fl(); h+='<div class="sp"></div>'; }
     else { fl(); h+='<div>'+l+'</div>'; }
   }
-  fl(); ft(); return h;
+  fl(); ft();
+  h=h.replace(/@@CB(\d+)@@/g,(m,i)=>codeBlockHTML(blocks[+i]));   // restore fenced code blocks
+  return h;
 }
+// split a model reply into its thinking (<think>/<thinking>) and the visible body (ported from leedcode)
+function splitThinking(text){
+  let think='';
+  const body=(text||'').replace(/<(think|thinking)>([\s\S]*?)<\/\1>/gi,(m,_t,c)=>{ think+=(think?'\n\n':'')+c.trim(); return ''; });
+  return {think:think.trim(), body:body.trim()};
+}
+function thoughtBlock(content,id,streaming){
+  const open=!!streaming;   // expanded + "Thinking…" while streaming; auto-collapses to "Thought" after
+  return `<div class="thought" id="th-${id}"><button type="button" class="thtoggle" onclick="toggleThought('${id}')">`+
+    `<span class="thdot${streaming?' pulse':''}"></span><span class="thlbl">${streaming?'Thinking…':'Thought'}</span>`+
+    `<span class="thchev">${open?'▴':'▾'}</span></button>`+
+    `<div class="thbody"${open?'':' hidden'}><pre>${esc(content)}</pre></div></div>`;
+}
+function toggleThought(id){ const b=document.getElementById('th-'+id); if(!b)return; const body=b.querySelector('.thbody'),chev=b.querySelector('.thchev');
+  const open=body.hidden; body.hidden=!open; chev.textContent=open?'▴':'▾'; }
 function selectDoc(i){ knowledgeSel=i; _kwSig=''; renderKnowledge(knowledgeDocs); }
 function selectDocByName(n){ const i=knowledgeDocs.findIndex(d=>d.name===n); if(i>=0) selectDoc(i); }
 function renderKnowledge(docs){
@@ -247,7 +344,10 @@ function renderKnowledge(docs){
   if(sig===_kwSig) return; _kwSig=sig;   // don't rebuild (reset scroll) when nothing changed
   if(!knowledgeDocs.length){ el.innerHTML='<div class="kwrap"><div class="empty" style="padding:24px">Jarvis hasn\'t explored yet — it writes here as it discovers its world.</div></div>'; return; }
   if(knowledgeSel>=knowledgeDocs.length) knowledgeSel=0;
-  const list=knowledgeDocs.map((d,i)=>'<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>').join('');
+  // sidebar shows only important docs (INDEX + per-host discovery); answered-question notes stay
+  // reachable via links inside INDEX, but don't clutter the rail.
+  const list=knowledgeDocs.map((d,i)=>({d,i})).filter(x=>x.d.primary!==false)
+    .map(({d,i})=>'<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>').join('');
   el.innerHTML='<div class="kwrap"><div class="kdocs">'+list+'</div><div class="kbody">'+md(knowledgeDocs[knowledgeSel].content)+'</div></div>';
 }
 const JARVIS_ART = [
@@ -320,6 +420,7 @@ async function load(){
   if(!booted){ booted=true; show('chat'); if(!setup.complete) activeConv='setup'; }
   if(!activeConv && convs.length) activeConv = convs[0].id;
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
+  if((msgs||[]).some(m=>m.streaming)) _fastUntil=Date.now()+12000;   // keep polling fast while a reply streams
   // conversations sidebar
   const clist=document.getElementById('convlist'); clist.innerHTML='';
   const active=convs.filter(c=>!c.archived), archived=convs.filter(c=>c.archived);
@@ -350,17 +451,50 @@ async function load(){
   const c=(cfg.config)||{}; const idn=c.identity||{};
   document.getElementById('mode').textContent=idn.mode||'—';
   document.getElementById('mode').className='mode-'+(idn.mode||'');
+  const orch=((c.llm||{}).routing||{}).orchestrator||'';
+  const cm=document.getElementById('chip-model'); if(cm) cm.textContent=(orch.split(':')[1]||orch||'brain');
+  const cmo=document.getElementById('chip-mode'); if(cmo) cmo.textContent=idn.mode||'shadow';
   const csig=JSON.stringify(cfg.config||{});
-  if(csig!==_cfgSig){
+  // Re-render only when the server config changed AND the owner isn't mid-edit (don't wipe typing).
+  if(csig!==_cfgSig && !(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#config'))){
     _cfgSig=csig;
     const cs=document.getElementById('config');
-    const card=(title,inner)=>`<div class="card"><h3>${title}</h3>${inner}</div>`;
+    const card=(title,inner,onsave)=>`<div class="card"><h3>${title}</h3>${inner}`+
+      (onsave?`<div style="margin-top:10px"><button type="button" class="bigbtn" onclick="${onsave}">Save</button> <span class="cfgmsg" id="msg-${onsave.replace(/[^a-z]/gi,'')}"></span></div>`:'')+`</div>`;
+    const txt=(id,v)=>`<input id="${id}" value="${esc(v??'')}"/>`;
+    const sel=(id,v,opts)=>`<select id="${id}">`+opts.map(o=>`<option${o===v?' selected':''}>${o}</option>`).join('')+`</select>`;
+    const row=(label,ctrl)=>`<div class="k">${label}</div><div>${ctrl}</div>`;
+
+    const idCard=card('IDENTITY','<div class="cfg2">'+
+      row('name',txt('cf-name',idn.name))+row('owner',txt('cf-owner',idn.owner))+
+      row('mode',sel('cf-mode',idn.mode||'shadow',['shadow','active','autonomous']))+'</div>','saveIdentity()');
+
+    const acKeys=['investigate','propose','fix_pr','deploy','infra_mutate','self_modify'];
+    const acNow=c.action_classes||{};
+    const acCard=card('ACTION CLASSES (what it may do without asking)','<div class="cfg2">'+
+      acKeys.map(k=>row(k,sel('cf-ac-'+k,acNow[k]||'deny',['allow','ask','deny']))).join('')+'</div>','saveActions()');
+
+    // LLM ROUTING — pool + model dependent dropdowns, models detected dynamically per pool (/api/pools)
+    const rt=(c.llm||{}).routing||{}; const pr=(c.llm||{}).params||{};
+    const roles=Object.keys(rt).length?Object.keys(rt):['triage','summarizer','researcher','orchestrator','red_team','fixer'];
+    const poolNames=(_pools&&_pools.pools.length)?_pools.pools.map(p=>p.name):[...new Set(roles.map(r=>(rt[r]||'').split(':')[0]).filter(Boolean))];
+    const roleRow=role=>{
+      const cur=rt[role]||''; const i=cur.indexOf(':'); const curPool=i>=0?cur.slice(0,i):(poolNames[0]||''); const curModel=i>=0?cur.slice(i+1):'';
+      const pools=poolNames.length?poolNames:[curPool];
+      const psel=`<select id="cf-pool-${role}" onchange="onPoolChange('${role}')">`+pools.map(p=>`<option${p===curPool?' selected':''}>${esc(p)}</option>`).join('')+`</select>`;
+      return row(role,`<div class="poolrow">${psel}${modelControl(role,curPool,curModel)}`+
+        `<span id="cf-reason-${role}" class="reason">${reasonControls(role,curModel,pr[role]||{})}</span></div>`);
+    };
+    const rtCard=card('LLM ROUTING (role → pool → model)',
+      '<div style="margin-bottom:10px"><button type="button" class="ghostbtn" onclick="refreshPools()">↻ refresh models</button>'+
+      (_pools?'':' <span class="cfgmsg">detecting models…</span>')+'</div><div class="cfg2">'+roles.map(roleRow).join('')+'</div>','saveRouting()');
+
+    const prCard=card('PRIORITY LADDER (one per line, top = most important)',
+      `<textarea id="cf-pri" rows="${Math.max(4,(c.priorities||[]).length)}" style="width:100%">${esc((c.priorities||[]).join('\n'))}</textarea>`,'savePriorities()');
+
     const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
        `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
-    cs.innerHTML = card('IDENTITY', kv(idn))
-      + card('ACTION CLASSES (what it may do without asking)', kv(c.action_classes))
-      + card('LLM ROUTING (role → model)', kv((c.llm||{}).routing))
-      + card('PRIORITY LADDER', '<pre>'+(c.priorities||[]).map((p,i)=>`${i}. ${p}`).join('\n')+'</pre>')
+    cs.innerHTML = idCard + acCard + rtCard + prCard
       + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
   }
   // procs
@@ -372,31 +506,65 @@ async function load(){
      `<tr class="run"><td><span class="dot"></span>${p.pid}</td><td>${p.etime}</td><td>${p.cmd}</td>`+
      `<td><button class="kill" onclick="kill('${p.pid}')">kill</button></td></tr>`);
   }
-  // chat (skip rebuild when nothing changed -> scrolling/typing isn't reset every poll)
-  const cl=document.getElementById('chatlog');
-  const chatSig=activeConv+'|'+JSON.stringify((msgs||[]).map(m=>[m.id,m.answered]))+'|'+brainChoice+'|'+
-    (setup?[setup.complete,setup.running,(setup.plan||[]).map(a=>a.id).join(','),(setup.needs_user||[]).map(n=>n.key).join(','),setup.ollama_key_set].join(','):'');
-  if(chatSig!==_chatSig){
-    _chatSig=chatSig;
-    const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
-    cl.innerHTML='';
-    for(const m of msgs){
-      const isJ = m.from==='jarvis'; const isQ = m.kind==='question';
-      let html=`<div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">`+
-        `<div class="who">${isJ?'JARVIS':'YOU'}${isQ?' · QUESTION':''} · ${(m.ts||'').replace('T',' ')}</div>${esc(m.text)}`;
-      if(isQ && !m.answered){
-        html+=`<div class="ansrow"><input id="a-${m.id}" placeholder="answer…" onkeydown="if(event.key==='Enter')answerQ('${m.id}')"/>`+
-              `<button type="button" class="ansbtn" onclick="answerQ('${m.id}')">answer</button></div>`;
-      } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
-      html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
-    }
-    renderSetupCard(cl);
-    if(nearBottom) cl.scrollTop = cl.scrollHeight;
-  }
+  renderChat(msgs);   // chat rendering (incremental while streaming) — see renderChat()
   const totalOpen = convs.reduce((s,c)=>s+(c.open_q||0),0);
   const badge=document.getElementById('qbadge');
   badge.hidden = totalOpen===0; badge.textContent = totalOpen;
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
+}
+// --- chat rendering, decoupled so streaming can update WITHOUT the heavy full-dashboard refresh ---
+let _chatIds='', _chatConv=null;
+function renderBody(m){
+  const isJ=m.from==='jarvis', isQ=m.kind==='question';
+  let body;
+  if(isJ && !isQ){
+    const sp=splitThinking(m.text); const hasField=m.thinking&&m.thinking.trim();
+    const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
+    body=(thinking?thoughtBlock(thinking,m.id,!!m.streaming):'')+'<div class="mdbody">'+md(bodyText)+'</div>'+
+         (m.streaming?'<span class="cursor">▌</span>':'');
+  } else {
+    const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
+    body=imgs+esc(m.text);
+  }
+  let inner=(isQ?`<div class="who">${isJ?'JARVIS':'YOU'} · QUESTION</div>`:'')+body;
+  if(isQ && !m.answered){ inner+=`<div class="ansrow"><input id="a-${m.id}" placeholder="answer…" onkeydown="if(event.key==='Enter')answerQ('${m.id}')"/>`+
+        `<button type="button" class="ansbtn" onclick="answerQ('${m.id}')">answer</button></div>`; }
+  else if(isQ && m.answered){ inner+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
+  return inner;
+}
+function renderChat(msgs){
+  if(_sseActive) return;   // SSE owns the chat DOM while a live reply is streaming
+  msgs=msgs||[]; const cl=document.getElementById('chatlog'); if(!cl) return;
+  const ids=msgs.map(m=>m.id).join(','); const streamMsg=msgs.find(m=>m.streaming);
+  // SMOOTH: same message set, only the streamed reply growing -> patch just that node (no full rebuild)
+  if(ids===_chatIds && streamMsg && activeConv===_chatConv){
+    const cell=cl.querySelector('[data-mid="'+streamMsg.id+'"] .msg');
+    if(cell){ cell.innerHTML=renderBody(streamMsg);
+      const tb=cl.querySelector('[data-mid="'+streamMsg.id+'"] .thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
+      if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
+      return; } }
+  const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,m.streaming?((m.text||'').length+'.'+(m.thinking||'').length):0]))+'|'+brainChoice+'|'+
+    (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
+  if(chatSig===_chatSig) return; _chatSig=chatSig; _chatIds=ids; _chatConv=activeConv;
+  const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
+  cl.innerHTML='';
+  for(const m of msgs){
+    const isJ=m.from==='jarvis', isQ=m.kind==='question'; const ts=(m.ts||'').replace('T',' ').slice(0,16);
+    cl.insertAdjacentHTML('beforeend',`<div class="row ${isJ?'jrow':'orow'}" data-mid="${m.id}"><div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">${renderBody(m)}</div><div class="ts">${ts}</div></div>`);
+  }
+  const lastm=msgs[msgs.length-1];
+  if(lastm && lastm.from==='owner' && (lastm.kind==='message'||lastm.kind==='note')){
+    cl.insertAdjacentHTML('beforeend','<div class="row jrow"><div class="msg jarvis"><div class="thinking-live"><span class="thdot pulse"></span>Thinking…</div></div></div>');
+  }
+  renderSetupCard(cl);
+  cl.querySelectorAll('.thought .thbody:not([hidden])').forEach(b=>{ b.scrollTop=b.scrollHeight; });
+  if(nearBottom) cl.scrollTop = cl.scrollHeight;
+}
+async function pollChat(){   // cheap fast-path: ONLY the messages endpoint (no pip-list/ps/etc.)
+  if(!activeConv) return;
+  let msgs; try{ msgs=await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()); }catch(e){ return; }
+  if((msgs||[]).some(m=>m.streaming)) _fastUntil=Date.now()+12000;
+  renderChat(msgs);
 }
 async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }
 async function answerQ(id){
@@ -412,12 +580,151 @@ async function archiveConv(id,val){
 }
 function selectConv(id){ activeConv=id; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
-async function say(){
-  const el=document.getElementById('sayinput'); const v=el.value.trim(); if(!v) return; el.value='';
-  await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v,conv:activeConv||'general'})}); load();
+let _pending=[];   // attached images pending send: [{name, data(dataURL)}]
+function onFiles(files){
+  for(const f of [...files]){ if(!f.type||!f.type.startsWith('image/')) continue;
+    if(_pending.length>=10) break;
+    const r=new FileReader(); r.onload=()=>{ _pending.push({name:f.name,data:r.result}); renderAttach(); }; r.readAsDataURL(f); }
 }
-let activeConv=null;
-load(); setInterval(load, 4000);
+function onPaste(e){ const items=(e.clipboardData&&e.clipboardData.items)||[];
+  for(const it of items){ if(it.type&&it.type.startsWith('image/')){ const f=it.getAsFile(); if(f) onFiles([f]); } } }
+function renderAttach(){ const s=document.getElementById('attachstrip'); if(!s) return;
+  if(!_pending.length){ s.hidden=true; s.innerHTML=''; return; }
+  s.hidden=false; s.innerHTML=_pending.map((p,i)=>`<span class="thumb"><img src="${p.data}"/><button type="button" onclick="rmAttach(${i})">×</button></span>`).join(''); }
+function rmAttach(i){ _pending.splice(i,1); renderAttach(); }
+async function say(){
+  const el=document.getElementById('sayinput'); const v=el.value.trim(); const imgs=_pending.slice();
+  if(!v && !imgs.length) return; el.value=''; autogrow(el); hideSlash();
+  const conv=activeConv||'general';
+  _fastUntil=Date.now()+90000;   // polling fallback if SSE is unavailable
+  // optimistic owner bubble (immediate, with thumbnails); SSE drives the live reply
+  const cl=document.getElementById('chatlog');
+  if(cl){ const ts=new Date().toISOString().replace('T',' ').slice(0,16);
+    const thumbs=imgs.map(p=>`<img class="msgimg" src="${p.data}"/>`).join('');
+    cl.insertAdjacentHTML('beforeend',`<div class="row orow"><div class="msg owner">${thumbs}${esc(v)}</div><div class="ts">${ts}</div></div>`);
+    cl.scrollTop=cl.scrollHeight; }
+  _pending=[]; renderAttach();
+  await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v,conv,images:imgs})});
+  openStream(conv);   // steering: if a reply was mid-flight, the server interrupts it and this re-attaches
+}
+// --- live reply over SSE (push, not poll) -------------------------------------------------------
+let _sse=null, _sseActive=false, _live={th:'',tx:'',status:''};
+function openStream(conv){
+  if(_sse){ try{_sse.close()}catch(e){} _sse=null; }
+  _live={th:'',tx:'',status:''}; _sseActive=true; setStop(true);
+  _sse=new EventSource('/api/chat-stream?conv='+encodeURIComponent(conv));
+  _sse.addEventListener('set',e=>{const d=JSON.parse(e.data); _live.th=d.thinking||''; _live.tx=d.text||''; _live.status=d.status||''; renderLive();});
+  _sse.addEventListener('status',e=>{ _live.status=JSON.parse(e.data).text||''; renderLive(); });
+  _sse.addEventListener('thinking',e=>{ _live.th+=JSON.parse(e.data).d||''; renderLive(); });
+  _sse.addEventListener('text',e=>{ _live.tx+=JSON.parse(e.data).d||''; renderLive(); });
+  _sse.addEventListener('done',()=>endStream());
+  _sse.addEventListener('ping',()=>{});
+  _sse.onerror=()=>endStream();   // fall back to polling (the reply is still persisted server-side)
+}
+function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; load(); }
+function renderLive(){
+  const cl=document.getElementById('chatlog'); if(!cl) return;
+  let row=cl.querySelector('[data-mid="sse-live"]');
+  if(!row){ cl.insertAdjacentHTML('beforeend','<div class="row jrow" data-mid="sse-live"><div class="msg jarvis"></div></div>'); row=cl.querySelector('[data-mid="sse-live"]'); }
+  const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,streaming:true};
+  const statusLine=(_live.status && !_live.tx)?`<div class="thinking-live"><span class="thdot pulse"></span>${esc(_live.status)}</div>`:'';
+  row.querySelector('.msg').innerHTML=statusLine+renderBody(m);
+  const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
+  if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
+}
+async function stopGen(){ try{ await fetch('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:activeConv||'general'})}); }catch(e){} }
+const _SVG_SEND='<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+const _SVG_STOP='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+function setStop(on){ const b=document.getElementById('sendbtn'); if(!b) return;
+  if(on){ b.innerHTML=_SVG_STOP; b.classList.add('stopping'); b.onclick=stopGen; b.title='Stop'; }
+  else { b.innerHTML=_SVG_SEND; b.classList.remove('stopping'); b.onclick=say; b.title='Send'; } }
+// --- slash-command autocomplete: type "/" to run a shipped skill from chat ---
+let _slashSkills=null;
+async function loadSlashSkills(){ if(_slashSkills) return _slashSkills;
+  try{ const r=await fetch('/api/skills'); const j=await r.json(); _slashSkills=(j.skills||j||[]).map(s=>s.name).filter(Boolean).sort(); }catch(e){ _slashSkills=[]; }
+  return _slashSkills; }
+function hideSlash(){ const m=document.getElementById('slashmenu'); if(m){ m.hidden=true; m.innerHTML=''; } }
+async function onSayInput(){
+  const el=document.getElementById('sayinput'), m=document.getElementById('slashmenu'); const v=el.value;
+  if(!v.startsWith('/') || v.includes(' ')){ hideSlash(); return; }
+  const q=v.slice(1).toLowerCase(); const names=await loadSlashSkills();
+  const hits=names.filter(n=>n.toLowerCase().startsWith(q));
+  if(!hits.length){ hideSlash(); return; }
+  m.innerHTML=hits.map(n=>'<div class="slashitem" onclick="pickSlash(\''+n+'\')">/'+n+'</div>').join('');
+  m.hidden=false;
+}
+function pickSlash(n){ const el=document.getElementById('sayinput'); el.value='/'+n+' '; hideSlash(); el.focus(); }
+// --- editable CONFIG: override identity / action-classes / routing / priorities ---
+async function saveCfg(patch, msgId){
+  const el=document.getElementById(msgId); if(el){ el.textContent='saving…'; el.style.color='var(--mut,#8aa)'; }
+  try{
+    const r=await fetch('/api/config-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+    const j=await r.json();
+    if(el){ el.textContent=j.ok?'✓ saved':('✕ '+(j.error||'failed')); el.style.color=j.ok?'var(--grntxt,#7ee2a8)':'#e88'; }
+    if(j.ok){ _cfgSig=null; load(); }       // force a fresh render with the saved values
+  }catch(e){ if(el){ el.textContent='✕ '+e; el.style.color='#e88'; } }
+}
+const _v=id=>{const e=document.getElementById(id);return e?e.value:undefined;};
+function saveIdentity(){ saveCfg({identity:{name:_v('cf-name'),owner:_v('cf-owner'),mode:_v('cf-mode')}},'msg-saveIdentity'); }
+function saveActions(){ const ks=['investigate','propose','fix_pr','deploy','infra_mutate','self_modify'];
+  const a={}; ks.forEach(k=>a[k]=_v('cf-ac-'+k)); saveCfg({action_classes:a},'msg-saveActions'); }
+// routing pool/model dropdowns (models detected per pool via /api/pools)
+let _pools=null;
+async function loadPools(refresh){ try{const r=await fetch('/api/pools'+(refresh?'?refresh=1':''));_pools=await r.json();}catch(e){ if(!_pools)_pools={pools:[],aliases:{}}; } return _pools; }
+async function refreshPools(){ const m=document.getElementById('msg-saveRouting'); if(m){m.textContent='detecting…';m.style.color='var(--mut,#8aa)';} await loadPools(true); _cfgSig=null; load(); }
+function poolMap(){ const m={}; if(_pools)(_pools.pools||[]).forEach(p=>m[p.name]=p.models||[]); return m; }
+function modelControl(role,pool,curModel){
+  const models=(poolMap()[pool]||[]).slice();
+  if(curModel&&!models.includes(curModel)) models.unshift(curModel);
+  if(models.length) return `<select id="cf-model-${role}" onchange="refreshReason('${role}')">`+models.map(m=>`<option${m===curModel?' selected':''}>${esc(m)}</option>`).join('')+`</select>`;
+  return `<input id="cf-model-${role}" value="${esc(curModel)}" placeholder="model" oninput="refreshReason('${role}')"/>`;
+}
+function onPoolChange(role){
+  const pool=document.getElementById('cf-pool-'+role).value;
+  const holder=document.getElementById('cf-model-'+role); const cur=holder?holder.value:'';
+  const models=poolMap()[pool]||[]; const model=models.includes(cur)?cur:(models[0]||'');
+  const tmp=document.createElement('span'); tmp.innerHTML=modelControl(role,pool,model);
+  if(holder) holder.replaceWith(tmp.firstChild);
+  refreshReason(role);
+}
+// reasoning controls — effort (gpt-5/o-series/codex) and thinking level (claude), only when supported
+function supportsEffort(m){ return /(^|[:_\-])(o3|o4|gpt-5)/i.test(m||'')||/codex/i.test(m||''); }
+function supportsThinking(m){ return /(claude|opus|sonnet|haiku)/i.test(m||''); }
+function rsel(id,label,val,opts){ return `<span class="rctl"><label>${label}</label><select id="${id}">`+opts.map(o=>`<option${o===(val||'default')?' selected':''}>${o}</option>`).join('')+`</select></span>`; }
+function reasonControls(role,model,rp){ rp=rp||{}; let h='';
+  if(supportsEffort(model)) h+=rsel('cf-effort-'+role,'effort',rp.effort,['default','minimal','low','medium','high']);
+  if(supportsThinking(model)) h+=rsel('cf-think-'+role,'thinking',rp.thinking,['default','low','medium','high']);
+  return h; }
+function refreshReason(role){
+  const model=(document.getElementById('cf-model-'+role)||{}).value||'';
+  const e=document.getElementById('cf-effort-'+role), t=document.getElementById('cf-think-'+role);
+  const holder=document.getElementById('cf-reason-'+role);
+  if(holder) holder.innerHTML=reasonControls(role,model,{effort:e&&e.value,thinking:t&&t.value});
+}
+function saveRouting(){ const r={}, params={};
+  document.querySelectorAll('[id^="cf-pool-"]').forEach(e=>{ const role=e.id.slice(8); const m=document.getElementById('cf-model-'+role); const model=m?m.value.trim():''; if(model) r[role]=e.value+':'+model;
+    const eff=document.getElementById('cf-effort-'+role), th=document.getElementById('cf-think-'+role); const p={};
+    if(eff) p.effort=eff.value; if(th) p.thinking=th.value; if(Object.keys(p).length) params[role]=p; });
+  saveCfg({routing:r,params:params},'msg-saveRouting'); }
+function savePriorities(){ saveCfg({priorities:(_v('cf-pri')||'').split('\n')},'msg-savePriorities'); }
+function autogrow(el){ if(!el)return; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
+function sayKey(e){
+  const m=document.getElementById('slashmenu');
+  if(m && !m.hidden){ const items=[...m.querySelectorAll('.slashitem')];
+    if(e.key==='Tab'||(e.key==='Enter'&&items.length===1)){ e.preventDefault(); items[0].click(); return; }
+    if(e.key==='Escape'){ hideSlash(); return; } }
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); say(); }   // Enter sends, Shift+Enter newline
+}
+let activeConv=null; let _fastUntil=0; let _lastFull=0;
+// While streaming, poll ONLY the cheap messages endpoint every ~300ms; do the heavy full refresh
+// (config/skills/procs/discovery/models — skills runs pip-list, ~170ms) only every 4s.
+function _tick(){
+  const now=Date.now(), fast=now<_fastUntil;
+  if(now-_lastFull>=4000){ _lastFull=now; load(); } else { pollChat(); }
+  setTimeout(_tick, fast?300:4000);
+}
+_tick();
+loadPools().then(()=>{ _cfgSig=null; load(); });   // detect models per pool, then re-render routing
 </script>
 </body>
 </html>
