@@ -39,8 +39,22 @@ def run(once: bool = False):
         signal.signal(s, lambda *a: stop.__setitem__("v", True))
     print(f"[jarvis] wake loop up (heartbeat floor {load().get('wake',{}).get('heartbeat_seconds',1800)}s; "
           f"touch {WAKE} to wake)")
+    # Telegram channel (no-op without a token): instantiated once so getUpdates offset persists.
+    tg = None
+    try:
+        from jarvis.adapters.notifier import TelegramNotifier
+        tg = TelegramNotifier()
+    except Exception:
+        tg = None
     while not stop["v"]:
         cfg = load()                        # live config reload each wake
+        if tg and tg.enabled:               # ingest owner replies from Telegram into the chat
+            try:
+                from jarvis import messaging
+                for txt in tg.poll():
+                    messaging.say(txt, conv="telegram", title="Telegram")
+            except Exception:
+                pass
         decision = kernel.tick(cfg)
         delay = next_delay(cfg, decision)
         print(f"[jarvis] tick {decision['ts']} rung={decision['rung']} -> next wake in {delay}s")

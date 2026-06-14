@@ -135,7 +135,14 @@ def think(cfg, decision, world):
         decision["asked"] = q
         decision["thought"] = f"stuck -> asked owner: {q}"
         try:
-            messaging.post_question(q, ref=decision["action"][:60])
+            messaging.post_question(q, ref=decision["action"][:60])   # dashboard (canonical)
+        except Exception:
+            pass
+        try:                                                          # + Telegram if configured
+            from jarvis.adapters.notifier import TelegramNotifier
+            tg = TelegramNotifier()
+            if tg.enabled:
+                tg.ask(q)
         except Exception:
             pass
     else:

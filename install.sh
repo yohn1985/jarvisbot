@@ -432,7 +432,14 @@ def think(cfg, decision, world):
         decision["asked"] = q
         decision["thought"] = f"stuck -> asked owner: {q}"
         try:
-            messaging.post_question(q, ref=decision["action"][:60])
+            messaging.post_question(q, ref=decision["action"][:60])   # dashboard (canonical)
+        except Exception:
+            pass
+        try:                                                          # + Telegram if configured
+            from jarvis.adapters.notifier import TelegramNotifier
+            tg = TelegramNotifier()
+            if tg.enabled:
+                tg.ask(q)
         except Exception:
             pass
     else:
@@ -528,13 +535,10 @@ class Memory(ABC):
     @abstractmethod
     def recall(self, *, sig=None, area=None, limit=8) -> list: ...
 EOF
-  gen jarvis/adapters/notifier.py <<'EOF'
-"""Notifier adapter: how Jarvis reaches the owner (Telegram = casual, two-way)."""
+  seed jarvis/adapters/notifier.py <<'EOF'
+"""Notifier adapter (placeholder; real impl ships as a tracked file)."""
 from abc import ABC, abstractmethod
-
 class Notifier(ABC):
-    @abstractmethod
-    def ask(self, question: str) -> str | None: ...   # casual question -> owner reply
     @abstractmethod
     def tell(self, message: str) -> None: ...
 EOF
