@@ -1,0 +1,2 @@
+# discover uses only standard Linux tools (systemctl, ss, ip, df, docker) + the Jarvis LLM router.
+# No pip dependencies.
