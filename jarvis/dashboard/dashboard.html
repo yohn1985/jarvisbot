@@ -143,6 +143,7 @@ function show(id){
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0;
+let _kwSig='', _cfgSig='', _chatSig='';
 function md(t){
   const lines=(t||'').split('\n'); let h='', inList=false, inTable=false, tbuf=[];
   const fl=()=>{ if(inList){h+='</ul>';inList=false;} };
@@ -164,6 +165,8 @@ function md(t){
 function selectDoc(i){ knowledgeSel=i; renderKnowledge(knowledgeDocs); }
 function renderKnowledge(docs){
   knowledgeDocs=docs||[]; const el=document.getElementById('knowledge');
+  const sig=JSON.stringify(knowledgeDocs.map(d=>d.name))+':'+knowledgeSel;
+  if(sig===_kwSig) return; _kwSig=sig;   // don't rebuild (reset scroll) when nothing changed
   if(!knowledgeDocs.length){ el.innerHTML='<div class="kwrap"><div class="empty" style="padding:24px">Jarvis hasn\'t explored yet — it writes here as it discovers its world.</div></div>'; return; }
   if(knowledgeSel>=knowledgeDocs.length) knowledgeSel=0;
   const list=knowledgeDocs.map((d,i)=>'<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>').join('');
@@ -265,18 +268,22 @@ async function load(){
      `<td><span class="dot"></span>${r.status||''}</td><td>${r.duration??'—'}</td><td>${r.target||''}</td></tr>`);
   }
   // config
-  const cs=document.getElementById('config'); cs.innerHTML='';
   const c=(cfg.config)||{}; const idn=c.identity||{};
   document.getElementById('mode').textContent=idn.mode||'—';
   document.getElementById('mode').className='mode-'+(idn.mode||'');
-  const card=(title,inner)=>`<div class="card"><h3>${title}</h3>${inner}</div>`;
-  const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
-     `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
-  cs.innerHTML = card('IDENTITY', kv(idn))
-    + card('ACTION CLASSES (what it may do without asking)', kv(c.action_classes))
-    + card('LLM ROUTING (role → model)', kv((c.llm||{}).routing))
-    + card('PRIORITY LADDER', '<pre>'+(c.priorities||[]).map((p,i)=>`${i}. ${p}`).join('\n')+'</pre>')
-    + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
+  const csig=JSON.stringify(cfg.config||{});
+  if(csig!==_cfgSig){
+    _cfgSig=csig;
+    const cs=document.getElementById('config');
+    const card=(title,inner)=>`<div class="card"><h3>${title}</h3>${inner}</div>`;
+    const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
+       `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
+    cs.innerHTML = card('IDENTITY', kv(idn))
+      + card('ACTION CLASSES (what it may do without asking)', kv(c.action_classes))
+      + card('LLM ROUTING (role → model)', kv((c.llm||{}).routing))
+      + card('PRIORITY LADDER', '<pre>'+(c.priorities||[]).map((p,i)=>`${i}. ${p}`).join('\n')+'</pre>')
+      + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
+  }
   // procs
   const pb=document.getElementById('procs-body'); pb.innerHTML='';
   document.getElementById('procs').textContent=procs.length+' procs';
@@ -286,27 +293,30 @@ async function load(){
      `<tr class="run"><td><span class="dot"></span>${p.pid}</td><td>${p.etime}</td><td>${p.cmd}</td>`+
      `<td><button class="kill" onclick="kill('${p.pid}')">kill</button></td></tr>`);
   }
-  // chat
+  // chat (skip rebuild when nothing changed -> scrolling/typing isn't reset every poll)
   const cl=document.getElementById('chatlog');
-  const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 80;
-  cl.innerHTML='';
-  let openQ=0;
-  for(const m of msgs){
-    const isJ = m.from==='jarvis'; const isQ = m.kind==='question';
-    if(isQ && !m.answered) openQ++;
-    let html=`<div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">`+
-      `<div class="who">${isJ?'JARVIS':'YOU'}${isQ?' · QUESTION':''} · ${(m.ts||'').replace('T',' ')}</div>${esc(m.text)}`;
-    if(isQ && !m.answered){
-      html+=`<div class="ansrow"><input id="a-${m.id}" placeholder="answer…" onkeydown="if(event.key==='Enter')answerQ('${m.id}')"/>`+
-            `<button type="button" class="ansbtn" onclick="answerQ('${m.id}')">answer</button></div>`;
-    } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
-    html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
+  const chatSig=activeConv+'|'+JSON.stringify((msgs||[]).map(m=>[m.id,m.answered]))+'|'+brainChoice+'|'+
+    (setup?[setup.complete,setup.running,(setup.plan||[]).map(a=>a.id).join(','),(setup.needs_user||[]).map(n=>n.key).join(','),setup.ollama_key_set].join(','):'');
+  if(chatSig!==_chatSig){
+    _chatSig=chatSig;
+    const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
+    cl.innerHTML='';
+    for(const m of msgs){
+      const isJ = m.from==='jarvis'; const isQ = m.kind==='question';
+      let html=`<div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">`+
+        `<div class="who">${isJ?'JARVIS':'YOU'}${isQ?' · QUESTION':''} · ${(m.ts||'').replace('T',' ')}</div>${esc(m.text)}`;
+      if(isQ && !m.answered){
+        html+=`<div class="ansrow"><input id="a-${m.id}" placeholder="answer…" onkeydown="if(event.key==='Enter')answerQ('${m.id}')"/>`+
+              `<button type="button" class="ansbtn" onclick="answerQ('${m.id}')">answer</button></div>`;
+      } else if(isQ && m.answered){ html+=`<div class="who" style="margin-top:6px">answered: ${esc(m.answer)}</div>`; }
+      html+='</div>'; cl.insertAdjacentHTML('beforeend',html);
+    }
+    renderSetupCard(cl);
+    if(nearBottom) cl.scrollTop = cl.scrollHeight;
   }
-  renderSetupCard(cl);
   const totalOpen = convs.reduce((s,c)=>s+(c.open_q||0),0);
   const badge=document.getElementById('qbadge');
   badge.hidden = totalOpen===0; badge.textContent = totalOpen;
-  if(nearBottom) cl.scrollTop = cl.scrollHeight;
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 async function kill(pid){ await fetch('/api/kill?pid='+pid); load(); }

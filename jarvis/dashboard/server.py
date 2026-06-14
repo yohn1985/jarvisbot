@@ -87,6 +87,13 @@ def _discovery():
     return out[:25]
 
 
+def _env_context(limit=4000):
+    """The most recent discovery doc, so the brain actually KNOWS the environment it's in
+    (connects autodiscovery to chat + thinking instead of leaving it in a folder)."""
+    docs = _discovery()
+    return docs[0]["content"][:limit] if docs else ""
+
+
 # --- bootstrap setup (the dashboard's guided checklist) ---
 _EXEC = {"running": False, "last": None}
 _EXEC_LOCK = threading.Lock()
@@ -124,9 +131,12 @@ def _chat_reply(conv):
                                for m in msgs if m.get("kind") in ("message", "note", "answer", "question"))
         ident = cfg.get("identity") or {}
         name, mode = ident.get("name", "Jarvis"), ident.get("mode", "shadow")
+        env = _env_context()
         prompt = (f"You are {name}, the owner's personal autonomous ops/dev agent, chatting in your "
-                  f"dashboard (mode: {mode}). Reply concisely and directly to the latest owner message. "
-                  f"Conversation so far:\n{transcript}\n\n{name}:")
+                  f"dashboard (mode: {mode}). Reply concisely and directly to the latest owner message."
+                  + (f"\n\nWhat you've discovered about your environment (use it when relevant):\n{env}\n"
+                     if env else "")
+                  + f"\nConversation so far:\n{transcript}\n\n{name}:")
         out = llm.run("orchestrator", prompt, timeout=120).strip()
         if out:
             messaging.reply(out, conv=conv)
