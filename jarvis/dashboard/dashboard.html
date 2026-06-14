@@ -133,13 +133,18 @@ function renderSetup(s){
     return;
   }
   tab.hidden=false; badge.hidden=false; badge.textContent='!';
-  const plan=s.plan||[], doable=plan.filter(a=>!a.blocked), blocked=plan.filter(a=>a.blocked);
+  const plan=s.plan||[], doable=plan.filter(a=>!a.blocked), blocked=plan.filter(a=>a.blocked), needs=s.needs_user||[];
   let h='<div class="card"><h3>SET UP JARVIS</h3>';
   if(doable.length){
     h+='<p>Jarvis needs to set up '+doable.length+' thing'+(doable.length>1?'s':'')+' on this computer:</p><ul class="plan">';
     for(const a of doable) h+='<li>'+esc(a.desc)+(a.needs_sudo?' <span class="tag">admin</span>':'')+'</li>';
     h+='</ul><button type="button" class="bigbtn" onclick="approve()"'+(s.running?' disabled':'')+'>'+(s.running?'Installing…':'Approve &amp; Install')+'</button>';
-  } else if(!blocked.length){ h+='<p>Finishing up…</p>'; }
+  } else if(!blocked.length && !needs.length){ h+='<p>Finishing up…</p>'; }
+  if(needs.length){
+    h+='<div class="needyou"><b>Your turn:</b><ul class="plan">';
+    for(const n of needs) h+='<li>'+esc(n.desc)+'</li>';
+    h+='</ul></div>';
+  }
   if(blocked.length){
     h+='<div class="needyou"><b>Needs your help:</b><ul class="plan">';
     for(const a of blocked) h+='<li>'+esc(a.desc)+' — '+esc(a.blocked_reason)+'</li>';

@@ -74,32 +74,64 @@ def find_ai_clis(cfg: dict) -> dict:
 
 # --- requirement checks (return (ok, detail); no AI) ---
 
-def check_ai_brain(cfg: dict):
+_VERIFY_TTL = 20   # seconds — while a brain isn't verified yet, re-probe at most this often
+
+
+def _probe_brain(cfg: dict):
+    """A tiny REAL call to confirm the brain actually ANSWERS. Fast-fails (and free) when the CLI
+    is installed but not logged in. This is the one place setup talks to the LLM — it's a ping,
+    not thinking."""
+    try:
+        from jarvis.adapters.llm import build_llm
+        llm = build_llm(cfg)
+        if not llm:
+            return False, "no LLM router configured"
+        out = (llm.run("triage", "Reply with exactly: OK", timeout=30) or "").strip()
+    except Exception as e:
+        return False, f"brain not responding ({str(e)[:60]})"
+    return ("ok" in out.lower()), ("brain answered" if "ok" in out.lower() else "brain gave no usable reply")
+
+
+def brain_installed(cfg: dict) -> bool:
+    return bool(find_ai_clis(cfg))
+
+
+def check_brain(cfg: dict):
+    """Required: the brain is installed AND actually answers. The successful probe is cached in
+    state (so we don't call the LLM every wake); while unverified we re-probe at most every
+    _VERIFY_TTL seconds. No CLI -> not ok, but we do NOT probe (keeps the no-AI bootstrap clean)."""
     found = find_ai_clis(cfg)
     if found:
-        _ensure_on_path(found.values())   # make what we found usable for the rest of the run
-        return True, "found " + ", ".join(f"{b}={p}" for b, p in sorted(found.items()))
-    looked = ", ".join(sorted(_ai_clis(cfg).values()))
-    return False, f"no AI CLI found on PATH or common dirs (looked for: {looked})"
+        _ensure_on_path(found.values())
+    else:
+        return False, "no AI CLI installed yet"
+    st = _load_state()
+    b = st.get("brain") or {}
+    if b.get("verified"):
+        return True, "brain verified"
+    if time.time() - float(b.get("last_probe", 0)) < _VERIFY_TTL:
+        return False, b.get("detail", "verifying…")
+    ok, detail = _probe_brain(cfg)
+    b["last_probe"], b["detail"] = time.time(), detail
+    if ok:
+        b["verified"] = True
+    st["brain"] = b
+    _save_state(st)
+    return ok, detail
 
 
-def _ask_ai_brain(cfg: dict) -> str:
-    names = " or ".join(f"`{b} login`" for b in sorted(_ai_clis(cfg).keys()) if b != "ollama") \
-        or "`claude login`"
-    return (
-        "I don't have an AI brain yet — I can't find an AI CLI on this machine, so I can't "
-        "think or plan until you give me one.\n\n"
-        "On this PC, do ONE of these:\n"
-        f"  - run {names}   (recommended — the CLI keeps the login token; I store nothing)\n"
-        "  - or reply here with an API key and I'll keep it in my local vault.\n\n"
-        "I search PATH and the usual install spots, so once it's set up I'll detect it on my "
-        "next check and tell you here."
-    )
+def _ask_brain(cfg: dict) -> str:
+    if not find_ai_clis(cfg):
+        return ("I don't have an AI brain yet. Open the SETUP tab and approve the install — or "
+                "install a CLI and run `claude login` — so I can think.")
+    return ("My AI brain is installed but not logged in, so I still can't think. On this machine, "
+            "run `claude login` (or `codex login`) in a terminal — or paste an API key here and "
+            "I'll keep it in my local vault.")
 
 
 # (key, label, required, check_fn, ask_fn)
 REQUIREMENTS = [
-    ("ai_brain", "AI brain (claude/codex CLI)", True, check_ai_brain, _ask_ai_brain),
+    ("brain", "AI brain (responds)", True, check_brain, _ask_brain),
 ]
 
 
@@ -154,12 +186,18 @@ def status(cfg: dict) -> dict:
     """Read-only snapshot of the requirement checks — no asking, no state writes. For the
     dashboard setup checklist."""
     checks, ready = [], True
-    for key, label, required, check_fn, _ in REQUIREMENTS:
+    for key, label, required, check_fn, ask_fn in REQUIREMENTS:
         try:
             ok, detail = check_fn(cfg)
         except Exception as e:
             ok, detail = False, f"check error: {str(e)[:80]}"
-        checks.append({"key": key, "label": label, "required": required, "ok": ok, "detail": detail})
+        item = {"key": key, "label": label, "required": required, "ok": ok, "detail": detail}
+        if not ok:
+            try:
+                item["hint"] = ask_fn(cfg)
+            except Exception:
+                item["hint"] = ""
+        checks.append(item)
         if required and not ok:
             ready = False
     return {"ready": ready, "checks": checks}

@@ -86,7 +86,13 @@ def _setup_state():
         cfg = load()
         st = preflight.status(cfg)
         plan = installer.plan(cfg)
-        return {"ready": st["ready"], "checks": st["checks"], "plan": plan,
+        # "Your turn" = unmet required checks the install plan can't fix itself (e.g. logging the
+        # brain in). Skip the brain item while a CLI install is still queued — that's not on you yet.
+        installing_cli = any(a["id"].startswith("cli_") for a in plan)
+        needs_user = [{"key": c["key"], "desc": c.get("hint") or c["label"]}
+                      for c in st["checks"] if c["required"] and not c["ok"]
+                      and not (c["key"] == "brain" and installing_cli)]
+        return {"ready": st["ready"], "checks": st["checks"], "plan": plan, "needs_user": needs_user,
                 "running": _EXEC["running"], "last": _EXEC["last"],
                 "complete": st["ready"] and not plan}
     except Exception as e:
