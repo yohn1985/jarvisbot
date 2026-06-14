@@ -102,6 +102,9 @@ def act(cfg, decision, world):
 def think(cfg, decision, world):
     """The 'mind' pass: reason about the decision via the LLM router; if the model can't
     proceed without info only the owner has, ask through the dashboard. Degrades to no-op."""
+    import os
+    if os.environ.get("JARVIS_NO_THINK"):   # fitness/eval runs must be deterministic + LLM-free
+        return
     if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
         return
     try:

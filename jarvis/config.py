@@ -9,8 +9,8 @@ DEFAULTS = {
         "p0_active_incident", "p1_unfinished_wip", "p2_self_caused_regression",
         "p4_self_maintenance", "p5_curiosity", "p3_needs_human_backlog",
     ],
-    "action_classes": {"investigate": "allow", "propose": "allow",
-                       "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
+    "action_classes": {"investigate": "allow", "propose": "allow", "fix_pr": "ask",
+                       "deploy": "deny", "infra_mutate": "deny", "self_modify": "deny"},
 }
 
 def _merge(base: dict, over: dict) -> dict:

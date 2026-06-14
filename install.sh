@@ -129,6 +129,7 @@ action_classes:
   fix_pr: ask             # open a fix PR through the red-team gate
   deploy: deny            # irreversible / customer-facing → earn it
   infra_mutate: deny      # nginx/dns/firewall → never autonomous yet
+  self_modify: deny       # edit its own code → only via the seatbelt, opt-in deliberately
 
 # LLM = a router over a model catalog (claude / codex / ollama local+cloud).
 llm:
@@ -264,8 +265,8 @@ DEFAULTS = {
         "p0_active_incident", "p1_unfinished_wip", "p2_self_caused_regression",
         "p4_self_maintenance", "p5_curiosity", "p3_needs_human_backlog",
     ],
-    "action_classes": {"investigate": "allow", "propose": "allow",
-                       "fix_pr": "ask", "deploy": "deny", "infra_mutate": "deny"},
+    "action_classes": {"investigate": "allow", "propose": "allow", "fix_pr": "ask",
+                       "deploy": "deny", "infra_mutate": "deny", "self_modify": "deny"},
 }
 
 def _merge(base: dict, over: dict) -> dict:
@@ -398,6 +399,9 @@ def act(cfg, decision, world):
 def think(cfg, decision, world):
     """The 'mind' pass: reason about the decision via the LLM router; if the model can't
     proceed without info only the owner has, ask through the dashboard. Degrades to no-op."""
+    import os
+    if os.environ.get("JARVIS_NO_THINK"):   # fitness/eval runs must be deterministic + LLM-free
+        return
     if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
         return
     try:
@@ -563,7 +567,7 @@ EOF
   gen jarvis/safety/__init__.py <<'EOF'
 """Safety: action-class gates + the DGM-style self-modification seatbelt."""
 EOF
-  gen jarvis/safety/seatbelt.py <<'EOF'
+  seed jarvis/safety/seatbelt.py <<'EOF'
 """Self-modification seatbelt (Darwin Gödel Machine, with reward-hacking defenses).
 
 Rules that must never be relaxed:
@@ -753,6 +757,9 @@ case "${1:-scaffold}" in
   breathe)  breathe;;
   run)      shift; "$(pybin)" "$ROOT/jarvis/loop.py" "$@";;     # persistent wake loop
   wake)     mkdir -p "$ROOT/state"; touch "$ROOT/state/wake"; log "wake marker set";;
+  selfcheck) "$(pybin)" "$ROOT/jarvis/safety/fitness.py";;     # tamper-proof fitness score
+  archive)  "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import snapshot,list_archive;print('snapshot:',snapshot('manual'));print('archive:',list_archive()[:5])";;
+  rollback) "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import rollback;print('rolled back' if rollback('${2:-}') else 'failed')";;
   skill)    shift; skill_cmd "$@";;
   dashboard) shift; "$(pybin)" "$ROOT/jarvis/dashboard/server.py" "$@";;
   doctor)   doctor;;

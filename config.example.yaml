@@ -11,6 +11,7 @@ action_classes:
   fix_pr: ask             # open a fix PR through the red-team gate
   deploy: deny            # irreversible / customer-facing → earn it
   infra_mutate: deny      # nginx/dns/firewall → never autonomous yet
+  self_modify: deny       # edit its own code → only via the seatbelt, opt-in deliberately
 
 # LLM = a router over a model catalog (claude / codex / ollama local+cloud).
 llm:
