@@ -132,7 +132,7 @@ EOF
 # Jarvis config — NON-secret, environment-specific. Copy to config.yaml and edit.
 identity:
   name: Jarvis
-  owner: yohn
+  owner: you              # your name or handle (used in prompts/messages)
   mode: shadow            # shadow | assist | autonomous  (start in shadow!)
 
 # What may it DO without asking? Everything else is propose-only.
