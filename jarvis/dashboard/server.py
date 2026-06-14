@@ -262,7 +262,8 @@ def _set_main_brain(target):
 
 
 _MAIN_TARGET = {"openai": "openai:gpt-4o", "anthropic": "anthropic:claude-opus-4-8",
-                "ollama": "ollama_cloud:deepseek-v4-pro"}
+                "ollama": "ollama_cloud:deepseek-v4-pro",
+                "claude_cli": "claude:opus", "codex_cli": "codex:gpt-5.5"}
 
 # Frontier brains connected by pasting an API key (no terminal): HTTP endpoint + key env + model.
 _FRONTIER = {
@@ -306,7 +307,7 @@ def _verify_main(cfg):
 
 
 def _models():
-    """MODELS cards — connect a brain by pasting an API key (no terminal). 'get' opens the key page."""
+    """MODELS cards in two groups: subscription login (CLI, cheapest) and API key (pay per use)."""
     cfg = {}
     try:
         from jarvis.config import load
@@ -314,16 +315,27 @@ def _models():
     except Exception:
         pass
     main = ((cfg.get("llm", {}) or {}).get("routing", {}) or {}).get("orchestrator", "")
+    home = Path(os.path.expanduser("~"))
+    SUB, KEY = "Subscription login (cheapest)", "API key (pay per use)"
     return [
-        {"id": "openai", "name": "OpenAI (GPT)", "tier": "frontier", "field": "key",
+        {"id": "claude_cli", "name": "Claude — Max/Pro plan", "section": SUB, "kind": "cli",
+         "cmd": "claude setup-token", "field": "token",
+         "connected": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or (home / ".claude" / ".credentials.json").exists()),
+         "is_main": main.startswith("claude:"),
+         "note": "One-click login is coming. For now: on a computer where you use Claude, run this — it opens your browser, logs in, and prints a token to paste below."},
+        {"id": "codex_cli", "name": "Codex — ChatGPT plan", "section": SUB, "kind": "cli",
+         "cmd": "codex login", "field": "token",
+         "connected": (home / ".codex" / "auth.json").exists(), "is_main": main.startswith("codex"),
+         "note": "One-click login is coming. For now: on a computer with a browser, run this to log in, then paste the access token below."},
+        {"id": "ollama", "name": "Ollama Cloud — cheap, recommended", "section": KEY, "kind": "key",
+         "field": "key", "get": "https://ollama.com/settings/keys",
+         "connected": bool(os.environ.get("OLLAMA_API_KEY")), "is_main": main.startswith("ollama")},
+        {"id": "openai", "name": "OpenAI (GPT)", "section": KEY, "kind": "key", "field": "key",
          "get": "https://platform.openai.com/api-keys",
          "connected": bool(os.environ.get("OPENAI_API_KEY")), "is_main": main.startswith("openai")},
-        {"id": "anthropic", "name": "Claude (Anthropic)", "tier": "frontier", "field": "key",
+        {"id": "anthropic", "name": "Claude (Anthropic)", "section": KEY, "kind": "key", "field": "key",
          "get": "https://console.anthropic.com/settings/keys",
          "connected": bool(os.environ.get("ANTHROPIC_API_KEY")), "is_main": main.startswith("anthropic")},
-        {"id": "ollama", "name": "Ollama Cloud — cheap, recommended", "tier": "cheap", "field": "key",
-         "get": "https://ollama.com/settings/keys",
-         "connected": bool(os.environ.get("OLLAMA_API_KEY")), "is_main": main.startswith("ollama")},
     ]
 
 
@@ -480,6 +492,29 @@ class H(BaseHTTPRequestHandler):
                 from jarvis.bootstrap import secrets
                 from jarvis.config import load
                 from jarvis.bootstrap import preflight
+                if prov == "claude_cli":                   # subscription via setup-token -> MAIN brain
+                    if not key:
+                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
+                    secrets.set_secret("CLAUDE_CODE_OAUTH_TOKEN", key)
+                    secrets.load_env()
+                    _set_main_brain("claude:opus")
+                    ok, detail = _verify_main(load())
+                    return self._send(200, json.dumps({"ok": ok, "detail":
+                        "Connected — Claude is now the main brain." if ok else f"Saved but couldn't get a reply (check the token): {detail}"}))
+                if prov == "codex_cli":                     # subscription via access token -> MAIN brain
+                    import shutil as _sh, subprocess as _sp
+                    if not key:
+                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
+                    if not _sh.which("codex"):
+                        return self._send(400, json.dumps({"ok": False, "error": "codex CLI isn't installed on this machine yet"}))
+                    try:
+                        _sp.run(["codex", "login", "--with-access-token"], input=key, capture_output=True, text=True, timeout=30)
+                    except Exception as e:
+                        return self._send(500, json.dumps({"ok": False, "error": str(e)[:160]}))
+                    _set_main_brain("codex:gpt-5.5")
+                    ok, detail = _verify_main(load())
+                    return self._send(200, json.dumps({"ok": ok, "detail":
+                        "Connected — Codex is now the main brain." if ok else f"Saved but couldn't get a reply: {detail}"}))
                 if prov in _FRONTIER:                       # paste an API key -> wire as MAIN brain
                     if not key:
                         return self._send(400, json.dumps({"ok": False, "error": "no key provided"}))
