@@ -179,7 +179,7 @@ def answer_one(llm):
               f"QUESTION: {nxt['q']}\n\nYOUR NOTES:\n{_known_context()}")
     ans = llm.run("orchestrator", prompt, timeout=180).strip()
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
-    note = KNOW_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{_slug(nxt['q'])}.md"
+    note = KNOW_DIR / f"{_slug(nxt['q'])}.md"     # logical name per question, updated in place
     note.write_text(f"# Q: {nxt['q']}\n_answered {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{ans}\n")
     nxt["answered"], nxt["answer"] = True, ans[:400]
     _save_q(queue)
@@ -291,14 +291,13 @@ def main():
     print("[discover] organizing with the brain...", file=sys.stderr)
     doc = organize(llm, facts)
 
-    out_dir = ROOT / "workspace" / "discovery"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    DISC_DIR.mkdir(parents=True, exist_ok=True)
     host = facts.get("hostname", "host")
-    path = out_dir / f"{host}-{time.strftime('%Y%m%d-%H%M%S')}.md"
-    path.write_text(f"# Discovery: {host}\n_generated {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{doc}\n")
+    path = DISC_DIR / f"{_slug(host)}.md"        # ONE stable, logically-named doc per host — updated in place
+    path.write_text(f"# Discovery: {host}\n_updated {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{doc}\n")
     add_questions(extract_questions(doc))   # queue the doc's open questions for future cycles
     write_index()
-    print(f"[discover] wrote {path} (+ INDEX.md, queued questions)")
+    print(f"[discover] updated {path} (+ INDEX.md, queued questions)")
     if a.print:
         print("\n" + doc)
 
