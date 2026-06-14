@@ -14,7 +14,7 @@ Install commands are config-overridable (bootstrap.*) so the public core hardcod
 the defaults are sane and shown to you in the plan before anything ever runs. Stdlib only.
 """
 from __future__ import annotations
-import os, shutil, sys
+import os, shutil, subprocess, sys
 from pathlib import Path
 
 from jarvis.bootstrap import preflight
@@ -61,14 +61,42 @@ def _pkg_manager():
     return None, None
 
 
-def _missing_pydeps() -> list[str]:
-    miss = []
-    for imp, spec in _PYDEPS:
-        try:
-            __import__(imp)
-        except Exception:
-            miss.append(spec)
-    return miss
+def _norm(spec: str) -> str:
+    """pip spec -> normalized package name: 'psycopg[binary]>=3.1' -> 'psycopg'."""
+    for sep in ("[", "==", ">=", "<=", "~=", ">", "<", "!=", ";", " "):
+        spec = spec.split(sep)[0]
+    return spec.strip().lower().replace("_", "-")
+
+
+def _venv_installed():
+    """Lowercased set of pip packages installed in the project venv; None if there's no venv yet
+    (so deps read as 'missing' until the venv exists). Deps install into the venv, not system
+    python, so this is what we must check for idempotency."""
+    py = _venv_py()
+    if not Path(py).exists():
+        return None
+    try:
+        out = subprocess.run([py, "-m", "pip", "list", "--format=freeze"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except Exception:
+        return set()
+    return {_norm(line) for line in out.splitlines() if line.strip()}
+
+
+def _missing_pydeps(installed) -> list[str]:
+    if installed is None:                       # no venv yet -> venv action runs first, then these
+        return [spec for _, spec in _PYDEPS]
+    return [spec for _, spec in _PYDEPS if _norm(spec) not in installed]
+
+
+def _skill_satisfied(req: Path, installed) -> bool:
+    if installed is None:
+        return False
+    for line in req.read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith("#") and _norm(s) not in installed:
+            return False
+    return True
 
 
 def _has_real_reqs(p: Path) -> bool:
@@ -94,13 +122,15 @@ def _cli_packages(cfg: dict) -> dict:
 def detect(cfg: dict) -> dict:
     pm_name, _ = _pkg_manager()
     is_root = (os.geteuid() == 0) if hasattr(os, "geteuid") else False
+    installed = _venv_installed()
     return {
         "pkg_manager": pm_name,
         "venv": Path(_venv_py()).exists(),
+        "venv_installed": installed,
         "node": bool(shutil.which("node")),
         "npm": bool(shutil.which("npm")),
         "docker": bool(shutil.which("docker")),
-        "missing_pydeps": _missing_pydeps(),
+        "missing_pydeps": _missing_pydeps(installed),
         "missing_tools": [(b, pkg) for b, pkg in _CORE_TOOLS if not shutil.which(b)],
         "missing_dirs": [d for d in _DIRS if not (ROOT / d).exists()],
         "have_env": (ROOT / ".env").exists(),
@@ -129,8 +159,14 @@ def _action(d, *, id, desc, cmd, needs_sudo=False, reversible=True, blocked=Fals
 def _plan_venv(d):
     if d["venv"]:
         return []
-    return [_action(d, id="venv", desc="Create the project virtualenv (.venv)",
-                    cmd=[sys.executable, "-m", "venv", str(ROOT / ".venv")])]
+    acts = []
+    pm_name, pm_base = _pkg_manager()
+    if pm_name == "apt-get":   # Debian/Ubuntu split venv + pip out of the base python package
+        acts.append(_action(d, id="python_base", desc="Install Python venv+pip support (python3-venv, python3-pip)",
+                            cmd=pm_base + ["python3-venv", "python3-pip"], needs_sudo=True))
+    acts.append(_action(d, id="venv", desc="Create the project virtualenv (.venv)",
+                        cmd=[sys.executable, "-m", "venv", str(ROOT / ".venv")]))
+    return acts
 
 
 def _plan_pydeps(d):
@@ -197,7 +233,8 @@ def _plan_skills(d):
     actions = []
     for name in d["shipped_skills"]:
         req = ROOT / "skills" / name / "requirements.txt"
-        if _has_real_reqs(req):            # skip comment-only manifests (e.g. deep-search)
+        # skip comment-only manifests (e.g. deep-search) and skills already satisfied in the venv
+        if _has_real_reqs(req) and not _skill_satisfied(req, d["venv_installed"]):
             actions.append(_action(d, id=f"skill_{name}", desc=f"Install deps for shipped skill '{name}'",
                                    cmd=[_venv_py(), "-m", "pip", "install", "-r", str(req)]))
     return actions
@@ -246,6 +283,11 @@ def plan(cfg: dict) -> list[dict]:
     out += _plan_skills(d)
     out += _plan_database(d)
     out += _plan_semantic(d, cfg)
+    # Fresh boxes have a stale/empty apt cache — refresh first if anything will apt-install.
+    pm_name, _ = _pkg_manager()
+    if pm_name == "apt-get" and any(c for a in out for c in [a["cmd"]] if "apt-get" in c):
+        out.insert(0, _action(d, id="apt_update", desc="Refresh package lists (apt-get update)",
+                              cmd=["apt-get", "update"], needs_sudo=True))
     return out
 
 
