@@ -1,0 +1,1 @@
+# web uses only the standard library (urllib) + the Jarvis LLM router. No pip dependencies.
