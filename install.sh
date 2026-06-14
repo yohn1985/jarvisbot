@@ -432,7 +432,77 @@ EOF
 # Drop task files here for the 'folder' worksource adapter.
 EOF
 
+  scaffold_skills
   log "scaffold complete."
+}
+
+# Skills FRAMEWORK lives in the installer; individual skills are modular folders
+# under skills/<name>/ (manifest + code + own requirements) — an extensible repo.
+scaffold_skills(){
+  gen jarvis/skills.py <<'EOF'
+#!/usr/bin/env python3
+"""Skill registry: discover skills by scanning skills/*/SKILL.md frontmatter.
+A skill is a self-contained folder (manifest + code + own requirements), so the
+skills/ tree is a modular, extensible repo — drop in a folder, it's a new capability.
+The mind lists skills (cheap), reads a SKILL.md just-in-time, and invokes the entrypoint."""
+import sys, re, json
+from pathlib import Path
+SKILLS = Path(__file__).resolve().parent.parent / "skills"
+
+def _frontmatter(md: str) -> dict:
+    m = re.match(r"^---\n(.*?)\n---", md, re.S); fm = {}
+    if m:
+        for line in m.group(1).splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1); fm[k.strip()] = v.strip()
+    return fm
+
+def list_skills() -> list:
+    out = []
+    for d in sorted(SKILLS.glob("*/SKILL.md")):
+        fm = _frontmatter(d.read_text()); fm["dir"] = str(d.parent)
+        fm.setdefault("name", d.parent.name); out.append(fm)
+    return out
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["list"]:
+        for s in list_skills():
+            print(f"  {s.get('name'):22} {s.get('description','')}")
+    else:
+        print(json.dumps(list_skills(), indent=2))
+EOF
+  gen skills/README.md <<'EOF'
+# Jarvis skills
+
+A modular, extensible capability repo. Each skill is a self-contained folder:
+
+```
+skills/<name>/
+  SKILL.md          # manifest (frontmatter) + when-to-use + usage
+  skill.py          # entrypoint (CLI: python skill.py <args>)
+  requirements.txt  # the skill's OWN deps (core stays lean)
+```
+
+`SKILL.md` frontmatter:
+```
+---
+name: <name>
+description: <one line — used by the mind to decide relevance>
+entrypoint: skill.py
+requires: <comma-separated pip deps>
+when_to_use: <when the mind should reach for this>
+---
+```
+
+Manage skills:
+```
+./install.sh skill list
+./install.sh skill install <name>     # deps into the project .venv
+./install.sh skill run <name> [args]
+```
+
+A skill should be runnable standalone (for testing) AND callable by the kernel.
+EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -463,6 +533,22 @@ down(){ docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
 
 breathe(){ log "one shadow-mode tick:"; python3 "$ROOT/jarvis/kernel.py"; }
 
+venv(){ [ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv" >/dev/null 2>&1; echo "$ROOT/.venv"; }
+skill_cmd(){
+  local cmd="${1:-list}"; shift 2>/dev/null || true
+  case "$cmd" in
+    list)    python3 "$ROOT/jarvis/skills.py" list;;
+    install) local n="${1:-}"; [ -n "$n" ] || die "usage: skill install <name>"
+             [ -f "$ROOT/skills/$n/requirements.txt" ] || die "no such skill: $n"
+             local v; v="$(venv)"; "$v/bin/pip" install -q -r "$ROOT/skills/$n/requirements.txt" \
+               && log "installed deps for skill '$n' into .venv";;
+    run)     local n="${1:-}"; shift 2>/dev/null || true; [ -n "$n" ] || die "usage: skill run <name> [args]"
+             local py="$ROOT/.venv/bin/python"; [ -x "$py" ] || py=python3
+             "$py" "$ROOT/skills/$n/skill.py" "$@";;
+    *) die "usage: skill (list | install <name> | run <name> [args])";;
+  esac
+}
+
 doctor(){ deps; log "stack:"; docker compose -f "$ROOT/docker-compose.yml" ps 2>/dev/null || warn "stack not up"; breathe; }
 
 # ---------------------------------------------------------------------------
@@ -473,6 +559,7 @@ case "${1:-scaffold}" in
   up)       up;;
   down)     down;;
   breathe)  breathe;;
+  skill)    shift; skill_cmd "$@";;
   doctor)   doctor;;
   *) die "unknown subcommand '$1' (scaffold|deps|initdb|up|down|breathe|doctor)";;
 esac
