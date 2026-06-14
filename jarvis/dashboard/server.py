@@ -261,6 +261,9 @@ def _set_main_brain(target):
     p.write_text(yaml.safe_dump(data, sort_keys=False))
 
 
+_MAIN_TARGET = {"claude": "claude:opus", "codex": "codex:gpt-5.5", "ollama": "ollama_cloud:deepseek-v4-pro"}
+
+
 def _models():
     """Model cards for the MODELS tab: which brains are connected + which is the main brain."""
     cfg = {}
@@ -270,17 +273,18 @@ def _models():
     except Exception:
         pass
     main = ((cfg.get("llm", {}) or {}).get("routing", {}) or {}).get("orchestrator", "")
+    home = Path(os.path.expanduser("~"))
+    claude_conn = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
+                       or (home / ".claude" / ".credentials.json").exists())
     return [
         {"id": "claude", "name": "Claude (Anthropic)", "tier": "frontier", "field": "token",
-         "connected": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")),
-         "is_main": main.startswith("claude"),
-         "how": "Run `claude setup-token` on a machine where you're logged into Claude, then paste the token."},
-        {"id": "codex", "name": "Codex (OpenAI / ChatGPT)", "tier": "frontier", "field": None,
-         "connected": False, "is_main": main.startswith("codex"),
-         "how": "Run `codex login` in a terminal on this machine (opens the browser flow)."},
+         "connected": claude_conn, "is_main": main.startswith("claude"),
+         "how": "Run `claude setup-token` where you're logged into Claude, then paste the token."},
+        {"id": "codex", "name": "Codex (OpenAI / ChatGPT)", "tier": "frontier", "field": "token",
+         "connected": (home / ".codex" / "auth.json").exists(), "is_main": main.startswith("codex"),
+         "how": "Run `codex login` on this machine, OR paste an access token (uses codex login --with-access-token)."},
         {"id": "ollama", "name": "Ollama Cloud (DeepSeek)", "tier": "agent / cheap", "field": "key",
-         "connected": bool(os.environ.get("OLLAMA_API_KEY")),
-         "is_main": main.startswith("ollama"),
+         "connected": bool(os.environ.get("OLLAMA_API_KEY")), "is_main": main.startswith("ollama"),
          "how": "Paste your Ollama Cloud API key (subscription pricing)."},
     ]
 
@@ -412,6 +416,18 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_approve(ids)))
         if u.path == "/api/skill-install":
             return self._send(200, json.dumps(_install_skill((body.get("name") or "").strip())))
+        if u.path == "/api/set-main":
+            target = _MAIN_TARGET.get((body.get("provider") or "").strip())
+            if not target:
+                return self._send(400, json.dumps({"ok": False, "error": "unknown provider"}))
+            try:
+                from jarvis.config import load
+                from jarvis.bootstrap import preflight
+                _set_main_brain(target)
+                ok, detail = preflight.recheck_brain(load())
+                return self._send(200, json.dumps({"ok": ok, "detail": detail}))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
         if u.path == "/api/verify-brain":
             try:
                 from jarvis.config import load
@@ -431,6 +447,20 @@ class H(BaseHTTPRequestHandler):
                         return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
                     secrets.set_secret("CLAUDE_CODE_OAUTH_TOKEN", key)
                     _set_main_brain("claude:opus")
+                    ok, detail = preflight.recheck_brain(load())
+                    return self._send(200, json.dumps({"ok": ok, "detail": detail}))
+                if prov == "codex":                        # subscription via access token -> MAIN brain
+                    import shutil as _sh, subprocess as _sp
+                    if not key:
+                        return self._send(400, json.dumps({"ok": False, "error": "no token provided"}))
+                    if not _sh.which("codex"):
+                        return self._send(400, json.dumps({"ok": False, "error": "codex CLI isn't installed on this machine yet"}))
+                    try:
+                        _sp.run(["codex", "login", "--with-access-token"], input=key,
+                                capture_output=True, text=True, timeout=30)
+                    except Exception as e:
+                        return self._send(500, json.dumps({"ok": False, "error": str(e)[:160]}))
+                    _set_main_brain("codex:gpt-5.5")
                     ok, detail = preflight.recheck_brain(load())
                     return self._send(200, json.dumps({"ok": ok, "detail": detail}))
                 if prov == "ollama":
