@@ -116,16 +116,56 @@ def post_note(text: str, ref: str = "", conv: str | None = None, title: str | No
                     "kind": "note", "text": text, "ref": ref})
 
 
-def say(text: str, conv: str = "general", title: str | None = None) -> dict:
+def say(text: str, conv: str = "general", title: str | None = None, images: list | None = None) -> dict:
     return _append({"id": uuid.uuid4().hex[:8], "ts": _now(), "from": "owner",
                     "conv": conv, "conv_title": title or (text[:48] if conv != "general" else None),
-                    "kind": "message", "text": text, "ref": ""})
+                    "kind": "message", "text": text, "ref": "", "images": images or []})
 
 
 def reply(text: str, conv: str = "general") -> dict:
     """Jarvis's reply to the owner in a conversation. No conv_title, so it never renames the thread."""
     return _append({"id": uuid.uuid4().hex[:8], "ts": _now(), "from": "jarvis",
                     "conv": conv, "kind": "message", "text": text, "ref": ""})
+
+
+def stream_start(conv: str = "general") -> str:
+    """Begin a streamed Jarvis reply: an empty message marked streaming. Returns its id."""
+    mid = uuid.uuid4().hex[:8]
+    _append({"id": mid, "ts": _now(), "from": "jarvis", "conv": conv,
+             "kind": "message", "text": "", "thinking": "", "ref": "", "streaming": True})
+    return mid
+
+
+def _rewrite(rows: list[dict]) -> None:
+    with open(MSGS, "w") as f:
+        for m in rows:
+            f.write(json.dumps(m) + "\n")
+
+
+def stream_update(mid: str, text: str, thinking: str | None = None) -> None:
+    """Set the running text (and thinking) of a streaming message — the dashboard shows it grow."""
+    rows = _all()
+    for m in rows:
+        if m.get("id") == mid:
+            m["text"] = text
+            if thinking is not None:
+                m["thinking"] = thinking
+            break
+    _rewrite(rows)
+
+
+def stream_end(mid: str, text: str | None = None, thinking: str | None = None) -> None:
+    """Finalize a streamed message (clears the streaming flag / cursor)."""
+    rows = _all()
+    for m in rows:
+        if m.get("id") == mid:
+            if text is not None:
+                m["text"] = text
+            if thinking is not None:
+                m["thinking"] = thinking
+            m["streaming"] = False
+            break
+    _rewrite(rows)
 
 
 def answer(qid: str, text: str) -> bool:
