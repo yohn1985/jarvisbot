@@ -683,6 +683,13 @@ initdb(){
     psql -U jarvis -d ai_memory < "$ROOT/db/schema.sql" && log "schema applied." || warn "initdb failed (is the stack up?)"
 }
 
+migrate(){
+  [ -f "$ROOT/.env" ] && set -a && . "$ROOT/.env" && set +a || true
+  initdb
+  log "importing the loopback ledger -> ai_memory.episodes ..."
+  "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;s=build_store(load());n=s.migrate_from_jsonl();print('  backend:',s.backend,'| imported',n,'new episodes' if n>=0 else '| no postgres connection — memory uses the jsonl ledger (fine)')"
+}
+
 up(){   [ -f "$ROOT/.env" ] || { cp "$ROOT/.env.example" "$ROOT/.env"; warn "created .env from example — set real secrets!"; }
         docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)"; }
 down(){ docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
@@ -713,6 +720,7 @@ case "${1:-scaffold}" in
   scaffold) scaffold; echo; deps; echo; log "next: ./install.sh breathe   (watch a tick) | ./install.sh up (start stack)";;
   deps)     deps "${2:-}";;
   initdb)   initdb;;
+  migrate)  migrate;;
   up)       up;;
   down)     down;;
   breathe)  breathe;;

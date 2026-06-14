@@ -22,6 +22,13 @@ def _default_ledger() -> str | None:
 
 
 def ledger_signals(cfg: dict) -> dict:
+    # Prefer the episodic store (postgres if up; it degrades to the same jsonl otherwise).
+    try:
+        from jarvis.memory.store import build_store
+        s = build_store(cfg)
+        return {"recurring": s.recurring(2, 5), "recent": s.recent(5), "backend": s.backend}
+    except Exception:
+        pass
     path = (cfg.get("memory", {}).get("episodic", {}) or {}).get("ledger") or _default_ledger()
     p = Path(path) if path else None
     if not p or not p.exists():
