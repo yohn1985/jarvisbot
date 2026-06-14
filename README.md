@@ -26,12 +26,23 @@ PROPOSE-ONLY out of the box. Irreversible/customer-facing action classes are
 OPT-IN in `config.yaml`. The mind NEVER scores its own work (reward-hacking
 defense — see DGM). Self-edits go: sandbox → eval (write-protected) → red-team → adopt or rollback.
 
-## Quickstart
+## Commands (the installer is the only entrypoint)
 ```
-./install.sh            # scaffold + check deps
-./install.sh breathe    # watch one shadow tick (no services needed)
-./install.sh up         # start postgres + redis
-./install.sh initdb     # apply the ai_memory schema
+./install.sh             # scaffold the tree + check deps
+./install.sh breathe     # one tick (perceive -> decide -> think -> act, shadow)
+./install.sh run         # the persistent wake loop (heartbeat + self-schedule + alert-wake)
+./install.sh dashboard --host 0.0.0.0 --port 8787   # the browser dashboard (chat/runs/config)
+./install.sh skill list|install <n>|run <n> [args]  # skills (e.g. youtube-research)
+./install.sh selfcheck   # the tamper-proof fitness score (the mind can't fake this)
+./install.sh archive     # snapshot a rollback point;  ./install.sh rollback <tag>
+./install.sh up          # docker: postgres + redis     ./install.sh migrate  # ledger -> postgres
+./install.sh wake        # poke the loop to wake now     ./install.sh doctor   # health check
 ```
 
-MIT licensed.
+## Status (self-build milestones)
+M1 perceive(real) · M2 LLM router · M3 episodic memory(degrade-safe) · M4 workers(hands,
+propose-only) · M5 wake loop · M6 self-mod seatbelt(archive+fitness+rollback). Channels:
+browser dashboard (chat w/ conversations) + Telegram. Default mode: **shadow** (proposes,
+never executes); young Jarvis works on itself + learns before the production backlog.
+
+MIT licensed. Home: jarvisbot.app
