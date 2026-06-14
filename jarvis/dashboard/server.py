@@ -103,6 +103,15 @@ def _procs():
     return procs
 
 
+def _skills():
+    """The skills shipped with the core (and any in the private overlay)."""
+    try:
+        from jarvis.skills import list_skills
+        return list_skills()
+    except Exception:
+        return []
+
+
 def _discovery():
     """What Jarvis has written about its world: discovery docs + answered-knowledge notes (INDEX first)."""
     paths = []
@@ -128,6 +137,15 @@ def _env_context(limit=4000):
     (connects autodiscovery to chat + thinking instead of leaving it in a folder)."""
     docs = _discovery()
     return docs[0]["content"][:limit] if docs else ""
+
+
+def _web_skill():
+    """Load the shipped web skill module so chat can browse the live web when the brain is unsure."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("jarvis_web_skill", str(ROOT / "skills" / "web" / "skill.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
 
 
 # --- bootstrap setup (the dashboard's guided checklist) ---
@@ -167,15 +185,33 @@ def _chat_reply(conv):
                                for m in msgs if m.get("kind") in ("message", "note", "answer", "question"))
         ident = cfg.get("identity") or {}
         name, mode = ident.get("name", "Jarvis"), ident.get("mode", "shadow")
+        from jarvis import persona
         env = _env_context()
-        prompt = (f"You are {name}, the owner's personal autonomous ops/dev agent, chatting in your "
-                  f"dashboard (mode: {mode}). Reply concisely and directly to the latest owner message."
-                  + (f"\n\nWhat you've discovered about your environment (use it when relevant):\n{env}\n"
-                     if env else "")
-                  + f"\nConversation so far:\n{transcript}\n\n{name}:")
-        out = llm.run("orchestrator", prompt, timeout=120).strip()
+        base = (persona.system(cfg) + " You're chatting with the owner in your dashboard."
+                + (f"\n\nWhat you've discovered about your environment:\n{env}\n" if env else "")
+                + f"\nConversation so far:\n{transcript}\n")
+        # Auto web-use: let the brain ask to browse when it needs current info it might not have.
+        out = llm.run("orchestrator", base +
+                      "\nReply to the latest owner message. If answering accurately needs CURRENT or "
+                      "web info you may not have, reply with EXACTLY 'SEARCH: <query>' and nothing else. "
+                      f"Otherwise answer concisely.\n\n{name}:", timeout=120).strip()
+        used_web = False
+        if out.upper().startswith("SEARCH:"):
+            query = out.split(":", 1)[1].strip()
+            try:
+                ans, results = _web_skill().research(query, llm)   # spawns a cheap-tier research agent
+                src = "\n".join("- " + r["url"] for r in results[:3])
+                out, used_web = ans + (f"\n\n(sources:\n{src})" if src else ""), True
+            except Exception:
+                out = llm.run("orchestrator", base + f"\n{name}:", timeout=120).strip()
         if out:
             messaging.reply(out, conv=conv)
+            try:
+                from jarvis import feedback
+                feedback.record(cfg, kind=("chat+web" if used_web else "chat"), area=conv,
+                                summary=(msgs[-1].get("text", "")[:120] if msgs else ""), outcome="replied")
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -270,6 +306,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_setup_state()))
         if u.path == "/api/discovery":
             return self._send(200, json.dumps(_discovery()))
+        if u.path == "/api/skills":
+            return self._send(200, json.dumps(_skills()))
         if u.path == "/api/conversations":
             return self._send(200, json.dumps(_conversations()))
         if u.path == "/api/messages":
