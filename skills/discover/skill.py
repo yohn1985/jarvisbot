@@ -178,6 +178,19 @@ def answer_one(llm):
               "cannot answer from what's known, state exactly what data you'd need to find out.\n\n"
               f"QUESTION: {nxt['q']}\n\nYOUR NOTES:\n{_known_context()}")
     ans = llm.run("orchestrator", prompt, timeout=180).strip()
+    # deep-fix discipline: red-team the answer; revise once if it doesn't survive.
+    try:
+        from jarvis.config import load as _load
+        from jarvis import verify as _verify
+        ctx = _known_context()
+        v = _verify.verify(_load(), ans, context=ctx)
+        if not v["survives"]:
+            ans = llm.run("orchestrator",
+                          f"Your draft answer was challenged by a red-team check. Critique:\n{v['critique']}\n\n"
+                          f"QUESTION: {nxt['q']}\nRevise to honestly address it; if still unsure, say what's "
+                          f"unverified.\n\nNOTES:\n{ctx}", timeout=180).strip()
+    except Exception:
+        pass
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
     note = KNOW_DIR / f"{_slug(nxt['q'])}.md"     # logical name per question, updated in place
     note.write_text(f"# Q: {nxt['q']}\n_answered {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{ans}\n")
