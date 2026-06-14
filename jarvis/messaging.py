@@ -122,6 +122,12 @@ def say(text: str, conv: str = "general", title: str | None = None) -> dict:
                     "kind": "message", "text": text, "ref": ""})
 
 
+def reply(text: str, conv: str = "general") -> dict:
+    """Jarvis's reply to the owner in a conversation. No conv_title, so it never renames the thread."""
+    return _append({"id": uuid.uuid4().hex[:8], "ts": _now(), "from": "jarvis",
+                    "conv": conv, "kind": "message", "text": text, "ref": ""})
+
+
 def answer(qid: str, text: str) -> bool:
     rows, found, conv = _all(), False, "general"
     for m in rows:

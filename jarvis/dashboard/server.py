@@ -94,6 +94,32 @@ def _enable_ollama_cloud():
     p.write_text(yaml.safe_dump(data, sort_keys=False))
 
 
+def _chat_reply(conv):
+    """Generate Jarvis's reply to the latest owner message in a conversation, via the brain.
+    Runs in a background thread so /api/say returns instantly; the reply shows on the next poll."""
+    try:
+        from jarvis.config import load
+        from jarvis.adapters.llm import build_llm
+        from jarvis import messaging
+        cfg = load()
+        llm = build_llm(cfg)
+        if not llm:
+            return
+        msgs = messaging.messages(conv, limit=20)
+        transcript = "\n".join(("Owner: " if m.get("from") == "owner" else "Jarvis: ") + (m.get("text") or "")
+                               for m in msgs if m.get("kind") in ("message", "note", "answer", "question"))
+        ident = cfg.get("identity") or {}
+        name, mode = ident.get("name", "Jarvis"), ident.get("mode", "shadow")
+        prompt = (f"You are {name}, the owner's personal autonomous ops/dev agent, chatting in your "
+                  f"dashboard (mode: {mode}). Reply concisely and directly to the latest owner message. "
+                  f"Conversation so far:\n{transcript}\n\n{name}:")
+        out = llm.run("orchestrator", prompt, timeout=120).strip()
+        if out:
+            messaging.reply(out, conv=conv)
+    except Exception:
+        pass
+
+
 def _setup_state():
     """One simple snapshot the UI uses to show the next thing for the owner to do."""
     try:
@@ -227,7 +253,9 @@ class H(BaseHTTPRequestHandler):
                 ok = messaging.answer(body.get("id", ""), body.get("text", ""))
                 return self._send(200 if ok else 400, json.dumps({"ok": ok}))
             if u.path == "/api/say":
-                messaging.say(body.get("text", ""), conv=body.get("conv", "general"))
+                conv = body.get("conv", "general")
+                messaging.say(body.get("text", ""), conv=conv)
+                threading.Thread(target=_chat_reply, args=(conv,), daemon=True).start()
                 return self._send(200, json.dumps({"ok": True}))
             if u.path == "/api/archive":
                 messaging.archive(body.get("conv", ""), bool(body.get("archived", True)))
