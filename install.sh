@@ -780,7 +780,10 @@ doctor(){
 }
 
 # ---------------------------------------------------------------------------
-dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:8787"; }
+dash_token(){ local f="$ROOT/state/dashboard_token"; mkdir -p "$ROOT/state"
+  [ -s "$f" ] || { python3 -c "import secrets;print(secrets.token_urlsafe(24))" > "$f"; chmod 600 "$f" 2>/dev/null; }
+  cat "$f"; }
+dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:8787/?token=$(dash_token)"; }
 
 # Bring the dashboard up (stdlib only — works before any deps/brain exist) so the owner has a
 # place to watch Jarvis and answer its setup questions. Backgrounded + detached; the durable

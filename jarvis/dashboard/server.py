@@ -12,7 +12,7 @@ Open-source-clean: no infra-specific anything; reads only Jarvis's own state + c
 Meant to be the foundation an outsourced front-end can iterate on (the /api/* JSON is stable).
 """
 from __future__ import annotations
-import argparse, json, os, signal, subprocess, sys, threading
+import argparse, http.cookies, json, os, secrets as _rand, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -20,6 +20,36 @@ from urllib.parse import urlparse, parse_qs
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 HTML = Path(__file__).resolve().parent / "dashboard.html"
+
+
+def _dash_token():
+    """Persistent access token for the dashboard (generated once). install.sh prints the URL with it."""
+    f = ROOT / "state" / "dashboard_token"
+    try:
+        t = f.read_text().strip()
+        if t:
+            return t
+    except Exception:
+        pass
+    t = _rand.token_urlsafe(24)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(t)
+    try:
+        os.chmod(f, 0o600)
+    except Exception:
+        pass
+    return t
+
+
+LOGIN_HTML = """<!doctype html><html><head><meta charset=utf-8><title>Jarvis</title><style>
+body{background:#0c0f0d;color:#c8d6c4;font:14px ui-monospace,monospace;display:flex;height:100vh;margin:0;align-items:center;justify-content:center}
+.b{border:1px solid #1d2a1d;border-radius:8px;padding:26px 30px;text-align:center;background:#11150f}
+input{background:#0c100c;border:1px solid #1d2a1d;color:#c8d6c4;padding:8px 10px;border-radius:5px;font:inherit}
+button{background:#3fae5a;color:#04140a;border:none;padding:8px 16px;border-radius:5px;cursor:pointer;margin-left:6px;font:inherit}</style></head>
+<body><div class=b><div style="color:#7fe39a;letter-spacing:2px;margin-bottom:14px">&#9679; JARVIS</div>
+<div style="color:#6f7e6b;margin-bottom:12px">access token</div>
+<form onsubmit="location='/?token='+encodeURIComponent(document.getElementById('t').value);return false">
+<input id=t type=password autofocus placeholder="token"><button>enter</button></form></div></body></html>"""
 
 
 def _runs():
@@ -195,21 +225,41 @@ def _approve(ids):
 
 
 class H(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", set_cookie=None):
         b = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b)))
+        if set_cookie:
+            self.send_header("Set-Cookie", set_cookie)
         self.end_headers()
         self.wfile.write(b)
+
+    def _authed(self, u):
+        """'query' if a valid ?token=, 'cookie' if a valid jarvis_token cookie, else None."""
+        tok = _dash_token()
+        if (parse_qs(u.query).get("token") or [None])[0] == tok:
+            return "query"
+        c = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        if c.get("jarvis_token") and c["jarvis_token"].value == tok:
+            return "cookie"
+        return None
 
     def log_message(self, *a):  # quiet
         pass
 
     def do_GET(self):
         u = urlparse(self.path)
+        auth = self._authed(u)
+        if not auth:
+            if u.path.startswith("/api/"):
+                return self._send(401, json.dumps({"error": "unauthorized"}))
+            return self._send(200, LOGIN_HTML, "text/html")
         if u.path in ("/", "/index.html"):
-            return self._send(200, HTML.read_text() if HTML.exists() else "<h1>Jarvis</h1>", "text/html")
+            ck = (f"jarvis_token={_dash_token()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
+                  if auth == "query" else None)
+            return self._send(200, HTML.read_text() if HTML.exists() else "<h1>Jarvis</h1>",
+                              "text/html", set_cookie=ck)
         if u.path == "/api/runs":
             return self._send(200, json.dumps(_runs()))
         if u.path == "/api/config":
@@ -236,6 +286,8 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if not self._authed(u):
+            return self._send(401, json.dumps({"error": "unauthorized"}))
         try:
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
