@@ -346,7 +346,9 @@ def extract_shell_commands(text: str, limit: int = 8) -> list[str]:
     through its tool layer instead of showing the plan to the owner as if it were an answer.
     """
     out: list[str] = []
-    for _lang, body in re.findall(r"```(bash|sh|shell)?\s*([\s\S]*?)```", text or "", flags=re.IGNORECASE):
+    blocks = [body for _lang, body in re.findall(r"```(bash|sh|shell)?\s*([\s\S]*?)```", text or "", flags=re.IGNORECASE)]
+    blocks += re.findall(r"<(?:bash|sh|shell)>\s*([\s\S]*?)\s*</(?:bash|sh|shell)>", text or "", flags=re.IGNORECASE)
+    for body in blocks:
         for raw in body.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):

@@ -727,13 +727,21 @@ def _chat_reply(conv):
             full = repair
             buf["t"] = repair
         try:
-            status_note("reflecting and updating memory if needed...")
-            harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
+            status_note("reflection queued")
         except Exception:
             pass
         messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"])
         st.emit("done", full)
         _stream_close(conv)
+        def _reflect_later():
+            try:
+                harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
+            except Exception:
+                pass
+        try:
+            threading.Thread(target=_reflect_later, daemon=True).start()
+        except Exception:
+            pass
         try:
             from jarvis import feedback
             feedback.record(cfg, kind=("chat+web" if used_web else "chat"), area=conv,
