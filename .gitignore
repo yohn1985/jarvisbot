@@ -9,3 +9,5 @@ state/
 config.yaml
 deploy/
 extras/
+
+workspace/
