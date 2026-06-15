@@ -706,6 +706,10 @@ def _chat_reply(conv):
             status_note("grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
         else:
             status_note("grounded in operating prompt; no local context files found")
+        compact_local = harness.compact_evidence(local_docs)
+        if compact_local:
+            buf["th"] += "\nHarness: local evidence gathered for follow-up questions\n" + compact_local + "\n"
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
         fast = harness.fast_local_answer(last, local_docs)
         if fast:
             status_note("answered from local memory without full tool loop")
@@ -766,6 +770,7 @@ def _chat_reply(conv):
                   "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
                   "process narration. State uncertainty and scoped negative evidence precisely: if you only checked "
                   "specific commands, files, endpoints, or directories, say that instead of making a universal claim. "
+                  "Do not name storage backends, runtimes, providers, or architecture pieces unless source or tool evidence names them. "
                   "Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
                   f"code in code blocks.\n\n{name}:")
         try:

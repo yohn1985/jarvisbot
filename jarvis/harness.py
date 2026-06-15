@@ -163,6 +163,22 @@ def _compact_prior_thinking(thinking: str, limit: int = 2200) -> str:
     return "\n".join(lines)[-limit:]
 
 
+def compact_evidence(text: str, limit: int = 4500) -> str:
+    """Compress local docs/code/ops evidence into source lines safe to carry across turns."""
+    if not text:
+        return ""
+    prefixes = (
+        "SOURCE:", "TITLE:", "CODE:", "MATCHING_SYMBOLS:", "PROBE:",
+        "MEMORY:", "GAP:", "STATUS:", "REASON:", "LEARNED:",
+    )
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(prefixes):
+            lines.append(line[:700])
+    return "\n".join(lines)[-limit:]
+
+
 def likely_needs_tools(text: str) -> bool:
     low = (text or "").lower()
     hints = (
