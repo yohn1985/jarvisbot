@@ -218,6 +218,16 @@ def answer_one(llm):
     nxt = next((x for x in queue if not x.get("answered")), None)
     if not nxt:
         return None
+    # Learning speed/quality knobs (config: explore.*). For fast bulk learning, route answers to a
+    # cheap/fast role and optionally skip the per-answer red-team; defaults stay careful.
+    try:
+        from jarvis.config import load as _loadcfg
+        _ex = (_loadcfg().get("explore", {}) or {})
+    except Exception:
+        _ex = {}
+    role = _ex.get("answer_role", "researcher")
+    ito = int(_ex.get("answer_inner_timeout", 150))
+    do_verify = bool(_ex.get("verify", True))
     web = _web_evidence(nxt["q"], llm) if _looks_external(nxt["q"]) else ""
     prompt = ("You are building your own understanding of your environment. Investigate and answer this "
               "question as specifically as you can. Be skeptical: prefer the live WEB EVIDENCE and your "
@@ -226,27 +236,28 @@ def answer_one(llm):
               f"QUESTION: {nxt['q']}\n\n"
               f"WEB EVIDENCE (live):\n{web or '(none gathered)'}\n\n"
               f"YOUR NOTES:\n{_known_context()}")
-    ans = llm.run("orchestrator", prompt, timeout=180).strip()
-    # deep-fix discipline: red-team the answer. Only REVISE when the check actually ran AND broke it
-    # (verified=True, survives=False) — an un-run check (verified=False) must not trigger churn, but it
-    # is recorded honestly as 'unverified' rather than silently trusted.
+    ans = llm.run(role, prompt, timeout=ito).strip()
+    # deep-fix discipline: red-team the answer (when explore.verify is on). Only REVISE when the check
+    # actually ran AND broke it (verified=True, survives=False) — an un-run check (verified=False) must
+    # not trigger churn, but it is recorded honestly as 'unverified' rather than silently trusted.
     verified = None
-    try:
-        from jarvis.config import load as _load
-        from jarvis import verify as _verify
-        ctx = _known_context()
-        v = _verify.verify(_load(), ans, context=ctx)
-        if v.get("verified") and not v.get("survives"):
-            ans = llm.run("orchestrator",
-                          f"Your draft answer was challenged by a red-team check. Critique:\n{v['critique']}\n\n"
-                          f"QUESTION: {nxt['q']}\nRevise to honestly address it; if still unsure, say what's "
-                          f"unverified.\n\nNOTES:\n{ctx}", timeout=180).strip()
-            v2 = _verify.verify(_load(), ans, context=ctx)
-            verified = bool(v2.get("survives"))
-        else:
-            verified = bool(v.get("survives"))
-    except Exception:
-        verified = None
+    if do_verify:
+        try:
+            from jarvis.config import load as _load
+            from jarvis import verify as _verify
+            ctx = _known_context()
+            v = _verify.verify(_load(), ans, context=ctx)
+            if v.get("verified") and not v.get("survives"):
+                ans = llm.run(role,
+                              f"Your draft answer was challenged by a red-team check. Critique:\n{v['critique']}\n\n"
+                              f"QUESTION: {nxt['q']}\nRevise to honestly address it; if still unsure, say what's "
+                              f"unverified.\n\nNOTES:\n{ctx}", timeout=ito).strip()
+                v2 = _verify.verify(_load(), ans, context=ctx)
+                verified = bool(v2.get("survives"))
+            else:
+                verified = bool(v.get("survives"))
+        except Exception:
+            verified = None
 
     # Don't file ignorance as knowledge: if the model says it can't answer, keep the question OPEN and
     # retry next cycle (discovery/web may fill the gap); after a few tries, escalate to the owner.
@@ -366,6 +377,27 @@ def organize(llm, facts: dict) -> str:
     return llm.run("orchestrator", prompt, timeout=240).strip()
 
 
+def generate_questions(llm, facts: dict) -> list:
+    """Dedicated, format-robust question generation: ask the model for a plain list of concrete
+    things worth investigating, ONE PER LINE. Does not depend on the discovery doc's prose
+    formatting — relying on that left the queue empty, so Jarvis never had anything to learn."""
+    blob = "\n\n".join(f"## {k}\n{v}" for k, v in facts.items() if v and not v.startswith("(unavailable"))
+    prompt = ("From these RAW FACTS about a machine, list 6-10 SPECIFIC, concrete questions worth "
+              "investigating to understand it better: unknowns, risks, things to verify, anything "
+              "surprising. Output ONLY the questions, ONE PER LINE, no numbering, no bullets, no "
+              "preamble, no markdown.\n\nRAW FACTS:\n" + blob[:12000])
+    try:
+        out = llm.run("summarizer", prompt, timeout=120) or ""
+    except Exception:
+        return []
+    qs = []
+    for line in out.splitlines():
+        q = re.sub(r"^[\s\-\*\d.)]+", "", line).strip().strip("`*")
+        if len(q) > 12:
+            qs.append(q)
+    return qs[:12]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--print", action="store_true", help="also print the document")
@@ -404,9 +436,12 @@ def main():
     host = facts.get("hostname", "host")
     path = DISC_DIR / f"{_slug(host)}.md"        # ONE stable, logically-named doc per host — updated in place
     path.write_text(f"# Discovery: {host}\n_updated {time.strftime('%Y-%m-%d %H:%M:%S')}_\n\n{doc}\n")
-    add_questions(extract_questions(doc))   # queue the doc's open questions for future cycles
+    # Queue questions from BOTH the doc (if it had a parseable list) and a dedicated structured
+    # call (format-robust); add_questions dedupes. This is what keeps the curiosity engine fed.
+    qs = extract_questions(doc) + generate_questions(llm, facts)
+    add_questions(qs)
     write_index()
-    print(f"[discover] updated {path} (+ INDEX.md, queued questions)")
+    print(f"[discover] updated {path} — queued {len(qs)} candidate question(s)", flush=True)
     if a.print:
         print("\n" + doc)
 

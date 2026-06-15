@@ -141,10 +141,15 @@ def _explore(cfg, decision):
     py = str(py) if py.exists() else "python3"
     skill = str(root / "skills" / "discover" / "skill.py")
 
+    ex = cfg.get("explore", {}) or {}
+    ans_to = int(ex.get("answer_timeout", 240))
+    per = int(ex.get("answers_per_cycle", _ANSWER_PER_CYCLE))
+    per = max(1, min(per, 540 // max(30, ans_to)))   # keep per × timeout under the ~600s tick-lock TTL
+
     def run(args):
-        # 240s × _ANSWER_PER_CYCLE(2) = 480s, under the 600s tick-lock TTL (loop.py); think() is gated
-        # off during learning, so a curiosity tick stays bounded and can't outlive its lock.
-        subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=240, cwd=str(root))
+        # think() is gated off during learning so a curiosity tick stays bounded and can't outlive
+        # its lock (per × ans_to is clamped under the 600s tick-lock TTL above).
+        subprocess.run([py, skill, *args], capture_output=True, text=True, timeout=ans_to, cwd=str(root))
 
     # Routine curiosity is SILENT — it shows in the RUNS feed (decision['worker']); chat is reserved
     # for things the owner should see (suggestions, questions, problems) so it isn't spammed.
@@ -152,7 +157,7 @@ def _explore(cfg, decision):
 
     if open_qs > 0:                       # learning: answer several open questions this cycle
         answered = 0
-        for _ in range(min(open_qs, _ANSWER_PER_CYCLE)):
+        for _ in range(min(open_qs, per)):
             try:
                 run(["--answer-one"])
                 answered += 1
