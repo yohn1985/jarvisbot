@@ -449,6 +449,8 @@ def search(pattern: str, root: str | None = None) -> dict:
 
 def format_result(result: dict) -> str:
     tool = result.get("tool", "tool")
+    if tool == "answer":
+        return str(result.get("output") or "")
     if tool == "shell":
         if result.get("ok"):
             return f"$ {result.get('command')}\n{result.get('output')}"
@@ -510,7 +512,10 @@ def maybe_direct(text: str) -> dict | None:
     if low in ("uptime", "server uptime", "machine uptime") or (
         "uptime" in low and any(w in low for w in ("give", "get", "show", "server", "machine", "what", "tell"))
     ):
-        return run_shell("uptime")
+        result = run_shell("uptime")
+        if result.get("ok"):
+            return {"ok": True, "tool": "answer", "output": _human_uptime(str(result.get("output") or ""))}
+        return result
     m = re.match(r"^(?:please\s+)?(?:run|execute)\s+(?:the\s+)?(?:shell\s+)?(?:command\s+)?(.+)$", raw, re.I)
     if m:
         return run_shell(m.group(1))
@@ -518,6 +523,16 @@ def maybe_direct(text: str) -> dict | None:
     if m:
         return run_shell(m.group(1))
     return None
+
+
+def _human_uptime(output: str) -> str:
+    out = (output or "").strip()
+    m = re.search(r"up\s+(.+?),\s+\d+\s+users?,\s+load average:\s*(.+)$", out)
+    if not m:
+        m = re.search(r"up\s+(.+?),\s+load average:\s*(.+)$", out)
+    if m:
+        return f"Uptime is {m.group(1).strip()}.\n\nLoad average: {m.group(2).strip()}."
+    return out
 
 
 BUILTIN_HELP = """/shell <command>  run a read-only shell command
