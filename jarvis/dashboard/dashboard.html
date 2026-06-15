@@ -380,6 +380,9 @@ function worklogFromThinking(thinking){
     if(!line.startsWith('Harness:')) continue;
     line=line.replace(/^Harness:\s*/,'').trim();
     if(!line || line==='reflection queued') continue;
+    if(line.startsWith('summarizing')) continue;
+    if(line.startsWith('grounding')) continue;
+    if(line.startsWith('grounded in')) continue;
     if(line.startsWith('local evidence gathered')) line='collected local evidence';
     if(line.startsWith('tool evidence gathered')) line='collected tool evidence';
     if(!steps.length || steps[steps.length-1]!==line) steps.push(line);
@@ -398,8 +401,8 @@ function editCardHTML(c,i,collapsed){
   return `<div class="editcard"><button type="button" class="edithead" onclick="toggleEditCard('${id}',this)">`+
     `<span>${collapsed?'▸':'▾'} Edited</span><span class="editpath">${esc(c.path||'file')}</span></button>`+
     `<div id="${id}" class="editbody"${collapsed?' hidden':''}>`+
-    `<div class="editpane"><div class="editlabel">BEFORE</div><pre>${esc(c.old||'')}</pre></div>`+
-    `<div class="editpane"><div class="editlabel">AFTER</div><pre>${esc(c.new||'')}</pre></div>`+
+    `<div class="editpane"><div class="editlabel">BEFORE CONTEXT</div><pre>${esc(c.before||c.old||'')}</pre></div>`+
+    `<div class="editpane"><div class="editlabel">AFTER CONTEXT</div><pre>${esc(c.after||c.new||'')}</pre></div>`+
     `</div></div>`;
 }
 function toggleEditCard(id,btn){ const el=document.getElementById(id); if(!el)return; const open=el.hidden; el.hidden=!open; const s=btn.querySelector('span'); if(s) s.textContent=(open?'▾':'▸')+' Edited'; }

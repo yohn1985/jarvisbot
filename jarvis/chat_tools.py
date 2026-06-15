@@ -326,8 +326,20 @@ def edit_file(path: str, old: str, new: str, owner_text: str = "", explicit: boo
             return {"ok": False, "tool": "edit", "path": str(p), "error": "old text not found"}
         if count > 1:
             return {"ok": False, "tool": "edit", "path": str(p), "error": f"old text appears {count} times; provide a more specific edit"}
-        p.write_text(data.replace(old, new, 1))
-        return {"ok": True, "tool": "edit", "path": str(p), "output": "edited file", "old": old, "new": new}
+        before_context = _edit_context(data, old)
+        updated = data.replace(old, new, 1)
+        after_context = _edit_context(updated, new)
+        p.write_text(updated)
+        return {
+            "ok": True,
+            "tool": "edit",
+            "path": str(p),
+            "output": "edited file",
+            "old": old,
+            "new": new,
+            "before_context": before_context,
+            "after_context": after_context,
+        }
     except Exception as e:
         return {"ok": False, "tool": "edit", "path": raw, "error": str(e)[:300]}
 
@@ -343,6 +355,19 @@ def _json_candidate(text: str) -> str | None:
     if start >= 0 and end > start:
         return text[start:end + 1]
     return None
+
+
+def _edit_context(text: str, needle: str, radius: int = 260) -> str:
+    if not needle:
+        return text[: radius * 2]
+    idx = text.find(needle)
+    if idx < 0:
+        return text[: radius * 2]
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(needle) + radius)
+    prefix = "...\\n" if start else ""
+    suffix = "\\n..." if end < len(text) else ""
+    return prefix + text[start:end] + suffix
 
 
 def parse_model_tool_call(text: str) -> dict | None:
@@ -507,6 +532,8 @@ def format_result(result: dict) -> str:
                 "path": result.get("path"),
                 "old": str(result.get("old") or "")[:1200],
                 "new": str(result.get("new") or "")[:1200],
+                "before": str(result.get("before_context") or result.get("old") or "")[:2000],
+                "after": str(result.get("after_context") or result.get("new") or "")[:2000],
             }
             return f"{result.get('output')}: {result.get('path')}\nJARVIS_EDIT {json.dumps(marker, sort_keys=True)}"
         return f"{result.get('path')}\n(error: {result.get('error')})"
