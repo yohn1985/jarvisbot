@@ -790,6 +790,8 @@ def _chat_reply(conv):
                   "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
                   "process narration. State uncertainty and scoped negative evidence precisely: if you only checked "
                   "specific commands, files, endpoints, or directories, say that instead of making a universal claim. "
+                  "If the owner asks what evidence you used or checked, list the exact files, commands, endpoints, "
+                  "docs, or memories by name/path; do not answer with vague references like 'those files'. "
                   "Do not name storage backends, runtimes, providers, or architecture pieces unless source or tool evidence names them. "
                   "Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
                   f"code in code blocks.\n\n{name}:")
