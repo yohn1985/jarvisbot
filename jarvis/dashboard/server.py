@@ -592,6 +592,53 @@ def _run_builtin_tool(conv, text, st=None):
         return True
 
 
+def _needs_local_tools(text):
+    low = (text or "").lower()
+    hints = (
+        "pipeline", "ticket", "status", "stuck", "service", "systemd", "timer", "journal",
+        "log", "uptime", "hostname", "disk", "memory", "network", "docs", "documentation",
+        "file", "folder", "repo", "branch", "commit", "deploy", "read", "search", "find",
+        "inspect", "check", "scan", "look at", "fix", "change", "edit", "update", "write",
+        "append", "create", "add", "implement", "patch", "remember", "document",
+    )
+    return any(h in low for h in hints)
+
+
+def _collect_tool_evidence(llm, base, latest, st=None):
+    """Provider-neutral tool loop. Any model can ask Jarvis to run a tool by emitting JSON."""
+    try:
+        from jarvis import chat_tools
+    except Exception:
+        return ""
+    if not _needs_local_tools(latest):
+        return ""
+    evidence = []
+    for step in range(chat_tools.MAX_TOOL_STEPS):
+        prompt = (
+            base
+            + "\n\n"
+            + chat_tools.TOOL_PROTOCOL
+            + ("\n\nTool evidence so far:\n" + "\n\n".join(evidence) if evidence else "")
+            + "\n\nLatest owner message:\n"
+            + latest
+            + "\n\nIf another tool is needed, return exactly one JSON tool request. If enough evidence is available, return exactly NO_TOOL."
+        )
+        try:
+            decision = llm.run("orchestrator", prompt, timeout=120).strip()
+        except Exception:
+            return "\n\n".join(evidence)
+        call = chat_tools.parse_model_tool_call(decision)
+        if not call:
+            break
+        if st:
+            st.emit("status", f"running {call.get('tool')} tool...")
+        result = chat_tools.run_model_tool(call, latest)
+        evidence.append(chat_tools.format_result(result))
+        if not result.get("ok") and call.get("tool") in ("write", "append"):
+            break
+    return "\n\n".join(evidence)
+
+
 def _chat_reply(conv):
     """Generate Jarvis's reply to the latest owner message in a conversation, via the brain.
     Runs in a background thread so /api/say returns instantly; tokens push live over SSE and the
@@ -668,6 +715,7 @@ def _chat_reply(conv):
                 web_ctx, used_web = (ans + (f"\n\nSOURCES:\n{src}" if src else "")), True
             except Exception:
                 web_ctx = ""
+        tool_ctx = _collect_tool_evidence(llm, base, last, st)
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
         mid = messaging.stream_start(conv)
@@ -684,6 +732,7 @@ def _chat_reply(conv):
                 messaging.stream_update(mid, buf["t"], thinking=buf["th"]); buf["last"] = now
 
         prompt = (base + (f"\nLIVE WEB EVIDENCE:\n{web_ctx}\n" if web_ctx else "")
+                  + (f"\nLOCAL TOOL EVIDENCE:\n{tool_ctx}\n" if tool_ctx else "")
                   + ("\nThe owner attached image(s) below — examine them to answer." if img_paths else "")
                   + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
                   "that fully conveys the essence — no preamble, filler, restating the question, or "

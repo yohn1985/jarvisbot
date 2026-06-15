@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import json
 from pathlib import Path
 
 
@@ -19,6 +20,7 @@ if not DEFAULT_CWD.exists():
 
 MAX_OUTPUT = 12000
 READ_LIMIT = 20000
+MAX_TOOL_STEPS = 5
 
 _DANGEROUS = re.compile(
     r"(^|[;&|]\s*|\s)("
@@ -36,6 +38,37 @@ _DANGEROUS = re.compile(
     re.IGNORECASE,
 )
 _WRITE_MARKERS = re.compile(r"(^|[^<])>(?!>)|>>|\b(curl|wget)\b.*\|\s*(sh|bash|python)", re.IGNORECASE)
+_EDIT_INTENT = re.compile(
+    r"\b(fix|change|edit|update|write|append|create|add|implement|patch|save|document|remember)\b",
+    re.IGNORECASE,
+)
+_PROTECTED_WRITE_PREFIXES = (
+    "/etc/",
+    "/var/",
+    "/opt/",
+    "/root/",
+    "/boot/",
+    "/dev/",
+    "/proc/",
+    "/sys/",
+    "/home/yohn/.ssh/",
+    "/home/yohn/.codex/",
+)
+
+
+TOOL_PROTOCOL = """Local tools are available through Jarvis, independent of the selected model provider.
+If you need local evidence or need to perform an explicitly requested file change, reply with exactly one JSON object and no prose:
+{"tool":"shell","args":{"cmd":"uptime"}}
+{"tool":"read","args":{"path":"/home/yohn/projects/work/docs/INDEX.md"}}
+{"tool":"search","args":{"pattern":"pipeline","path":"/home/yohn/projects/work"}}
+{"tool":"write","args":{"path":"/home/yohn/projects/work/example.md","content":"text"}}
+{"tool":"append","args":{"path":"/home/yohn/projects/work/example.md","content":"text"}}
+
+Rules:
+- Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
+- shell is read-only and blocks destructive or mutating commands.
+- write/append are allowed only when the owner explicitly asked to change/create/document/save something.
+- If no tool is needed, reply exactly: NO_TOOL"""
 
 
 def _clean_cmd(text: str) -> str:
@@ -61,6 +94,10 @@ def shell_safety_error(cmd: str) -> str | None:
     if _DANGEROUS.search(cmd) or _WRITE_MARKERS.search(cmd):
         return "blocked because this chat shell tool is read-only; use a deliberate deploy/edit path for changes"
     return None
+
+
+def owner_allows_write(owner_text: str) -> bool:
+    return bool(_EDIT_INTENT.search(owner_text or ""))
 
 
 def run_shell(cmd: str, timeout: int = 30) -> dict:
@@ -172,6 +209,9 @@ def write_file(path: str, content: str, append: bool = False) -> dict:
         p = Path(raw).expanduser()
         if not p.is_absolute():
             p = DEFAULT_CWD / p
+        resolved = str(p.resolve())
+        if any(resolved == x.rstrip("/") or resolved.startswith(x) for x in _PROTECTED_WRITE_PREFIXES):
+            return {"ok": False, "tool": "write", "path": str(p), "error": "protected path; use the repo/deploy path instead"}
         if not p.parent.exists():
             return {"ok": False, "tool": "write", "path": str(p), "error": "parent directory does not exist"}
         if append:
@@ -182,6 +222,50 @@ def write_file(path: str, content: str, append: bool = False) -> dict:
         return {"ok": True, "tool": "write", "path": str(p), "output": "wrote file"}
     except Exception as e:
         return {"ok": False, "tool": "write", "path": raw, "error": str(e)[:300]}
+
+
+def _json_candidate(text: str) -> str | None:
+    text = (text or "").strip()
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if m:
+        return m.group(1)
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start:end + 1]
+    return None
+
+
+def parse_model_tool_call(text: str) -> dict | None:
+    candidate = _json_candidate(text)
+    if not candidate:
+        return None
+    try:
+        data = json.loads(candidate)
+    except Exception:
+        return None
+    tool = (data.get("tool") or "").strip().lower()
+    args = data.get("args") or {}
+    if tool not in {"shell", "read", "search", "write", "append"} or not isinstance(args, dict):
+        return None
+    return {"tool": tool, "args": args}
+
+
+def run_model_tool(call: dict, owner_text: str) -> dict:
+    tool = (call or {}).get("tool")
+    args = (call or {}).get("args") or {}
+    if tool == "shell":
+        return run_shell(str(args.get("cmd") or ""))
+    if tool == "read":
+        return read_file(str(args.get("path") or ""))
+    if tool == "search":
+        return search(str(args.get("pattern") or ""), str(args.get("path") or DEFAULT_CWD))
+    if tool in ("write", "append"):
+        if not owner_allows_write(owner_text):
+            return {"ok": False, "tool": "write", "error": "write/append requires explicit owner edit intent"}
+        return write_file(str(args.get("path") or ""), str(args.get("content") or ""), append=(tool == "append"))
+    return {"ok": False, "tool": tool or "unknown", "error": "unknown tool"}
 
 
 def search(pattern: str, root: str | None = None) -> dict:
