@@ -17,10 +17,11 @@ DEFAULT_BACKENDS = {
 
 # Reasoning controls, applied per role from llm.params (set in the dashboard). Only models that
 # support them are offered the dropdowns; here we translate the chosen level to each backend's API.
-_THINK_BUDGET = {"low": 4000, "medium": 10000, "high": 24000}        # Anthropic thinking budget_tokens
+_THINK_BUDGET = {"low": 4000, "medium": 10000, "high": 24000, "max": 32000}   # Anthropic thinking budget_tokens
 _THINK_KEYWORD = {"low": "\n\nThink about this carefully.",          # claude CLI honors think/ultrathink
                   "medium": "\n\nThink hard about this.",
-                  "high": "\n\nUltrathink about this."}
+                  "high": "\n\nUltrathink about this.",
+                  "max": "\n\nUltrathink as hard as you possibly can about this."}
 
 
 def _img_media_type(path):

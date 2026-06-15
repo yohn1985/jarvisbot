@@ -76,8 +76,9 @@ wake → perceive → orient → decide (priority ladder) → act → reflect
   changes behavior.
 - **`jarvis/verify.py`** — the deep-fix discipline distilled: spawn a red-team agent to *disprove* a
   claim; **fail-closed** (an un-run check never counts as "passed").
-- **`jarvis/safety/seatbelt.py`** — self-modification with a tamper-proof fitness gate + an
-  independent red-team + a version archive to roll back to.
+- **`jarvis/safety/seatbelt.py`** — the self-modification **seatbelt**: snapshot → tamper-proof
+  fitness gate → independent red-team → one-command rollback. Built and tested, but **nothing drives
+  it autonomously yet** — the harness is ready for when self-editing lands. `self_modify` off by default.
 - **`skills/`** — shipped capabilities (web research, network discovery, deep code search,
   youtube-research). Install deps with one click; run from chat with `/skill …`.
 
@@ -111,7 +112,7 @@ directly; `install.sh` never overwrites them.
 ## Status
 
 Early beta and moving fast. The core loop, memory, model router, dashboard, skills, and the
-self-modification seatbelt are in place. Expect rough edges; issues and PRs welcome.
+self-modification **seatbelt** are in place. (The seatbelt is the safety harness — Jarvis does **not** autonomously edit its own code yet.) Expect rough edges; issues and PRs welcome.
 
 ## Contributing
 
