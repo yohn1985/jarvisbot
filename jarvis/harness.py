@@ -269,7 +269,7 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
                 pass
         result = chat_tools.run_model_tool(call, latest)
         evidence.append(chat_tools.format_result(result))
-        if not result.get("ok") and call.get("tool") in ("write", "append"):
+        if call.get("tool") in ("write", "append", "edit"):
             break
     return "\n\n".join(evidence)
 
