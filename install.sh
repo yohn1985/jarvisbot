@@ -636,10 +636,43 @@ EOF
   login_banner "$dburl" "$DIR"
 }
 
+# Tear Jarvis down: stop + remove the systemd services, the sudoers grant, and any legacy dedicated
+# 'jarvis' system user. By default it KEEPS your data (state/ memory+token, .env secrets, extras/
+# overlay) and tells you where it is; pass --purge to remove the install directory too.
+uninstall(){
+  local DIR="${JARVIS_SERVICE_DIR:-}"; [ -n "$DIR" ] || { [ -d /opt/jarvis ] && DIR=/opt/jarvis || DIR="$ROOT"; }
+  local purge=0; [ "${1:-}" = "--purge" ] && purge=1
+  [ -f "$ROOT/state/dashboard.pid" ] && kill "$(cat "$ROOT/state/dashboard.pid")" 2>/dev/null || true
+  local has_sys=0
+  if [ -e /etc/systemd/system/jarvis-loop.service ] || [ -e /etc/systemd/system/jarvis-dashboard.service ] || [ -e /etc/sudoers.d/jarvis ]; then has_sys=1; fi
+  if [ "$has_sys" -eq 1 ] || [ "$purge" -eq 1 ]; then
+    [ "$(id -u)" -eq 0 ] || die "removing the system service needs root — run: sudo ./install.sh uninstall (add --purge to remove data too)"
+    systemctl disable --now jarvis-loop.service jarvis-dashboard.service 2>/dev/null || true
+    rm -f /etc/systemd/system/jarvis-loop.service /etc/systemd/system/jarvis-dashboard.service
+    systemctl daemon-reload 2>/dev/null || true
+    pkill -f "jarvis/dashboard/server.py" 2>/dev/null || true
+    rm -f /etc/sudoers.d/jarvis
+    # remove ONLY a legacy dedicated 'jarvis' SYSTEM user (uid < 1000) — never a human/login user
+    if id jarvis >/dev/null 2>&1 && [ "$(id -u jarvis 2>/dev/null)" -lt 1000 ]; then userdel jarvis 2>/dev/null || true; fi
+    log "removed the systemd services, unit files, and sudoers grant."
+  else
+    log "no system service found — stopped any running dashboard."
+  fi
+  if [ "$purge" -eq 1 ]; then
+    cd / 2>/dev/null || true; rm -rf "$DIR"
+    log "purged $DIR — memory, secrets, and overlay all removed."
+  else
+    log "kept your data in $DIR (state/ memory+token, .env secrets, extras/ overlay)."
+    log "to remove that too:  sudo ./install.sh uninstall --purge   (or  sudo rm -rf $DIR)"
+  fi
+  log "your AI-CLI logins (~/.claude, ~/.codex) are untouched."
+}
+
 case "${1:-up}" in
   scaffold) scaffold; echo; deps; echo; land;;
   setup|land) land;;
   install-service|service) install_service;;
+  uninstall|remove) uninstall "${2:-}";;
   deps)     deps "${2:-}";;
   initdb)   initdb;;
   migrate)  migrate;;
@@ -656,5 +689,5 @@ case "${1:-up}" in
   url|login) login_banner "$(dash_url)" "$ROOT";;   # re-print the login link any time
   token)    cat "$ROOT/state/dashboard_token" 2>/dev/null || die "no token yet — run ./install.sh up";;
   doctor)   doctor;;
-  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|dashboard|doctor)";;
+  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|dashboard|doctor|install-service|uninstall [--purge])";;
 esac
