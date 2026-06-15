@@ -3,6 +3,9 @@ identity:
   name: Jarvis
   owner: you              # your name or handle (used in prompts/messages)
   mode: shadow            # shadow | assist | autonomous  (start in shadow!)
+                          # shadow: observe/report only
+                          # assist: act only when explicitly asked
+                          # autonomous: local-safe actions allowed; destructive/provider/system actions still blocked
 
 # What may it DO without asking? Everything else is propose-only.
 action_classes:

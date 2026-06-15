@@ -114,6 +114,7 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         )
         + "\n\nTool and evidence contract:\n"
         + "- Use available tools when local evidence is needed.\n"
+        + f"- Current tool mode: {chat_tools.mode_description()}.\n"
         + "- Do not claim you ran, scanned, read, indexed, remembered, deployed, or checked anything unless evidence in this prompt proves it.\n"
         + "- If evidence is missing, say what is missing and record the gap during reflection.\n"
         + f"\nConversation so far:\n{transcript}\n"

@@ -19,6 +19,7 @@ KNOW_DIR = ROOT / "workspace" / "knowledge"
 DOC_ROOTS = KNOW_DIR / "doc-roots.json"
 DOC_INDEX = KNOW_DIR / "local-docs-index.json"
 LEARNING_DEBT = KNOW_DIR / "learning-debt.jsonl"
+LEARNING_GAPS_DIR = KNOW_DIR / "learning-gaps"
 LEARNED = KNOW_DIR / "learned.jsonl"
 LEARNED_DIR = KNOW_DIR / "learned"
 QUESTIONS = KNOW_DIR / "questions.json"
@@ -264,18 +265,59 @@ def retrieve(query: str, cfg: dict | None = None, limit: int = 6) -> str:
             scored.append((score, item))
     scored.sort(key=lambda pair: (-pair[0], pair[1].get("path", "")))
     if not scored:
-        return ""
+        gap_lines = _retrieve_learning_gaps(query)
+        return gap_lines
     lines = [
         "Use only these local documentation snippets as evidence for this machine when relevant.",
         "Do not claim to have scanned, indexed, read, or remembered any other local file.",
     ]
     for score, item in scored[:limit]:
         lines.append(f"\nSOURCE: {item.get('path')}\nTITLE: {item.get('title')}\nSNIPPET: {item.get('snippet')}")
+    gap_lines = _retrieve_learning_gaps(query)
+    if gap_lines:
+        lines.append("\n" + gap_lines)
     return "\n".join(lines)[:9000]
+
+
+def _retrieve_learning_gaps(query: str, limit: int = 4) -> str:
+    terms = _terms(query)
+    if not terms:
+        return ""
+    hits = []
+    try:
+        if LEARNING_DEBT.exists():
+            for line in LEARNING_DEBT.read_text(encoding="utf-8").splitlines()[-300:]:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                hay = " ".join(str(row.get(k, "")) for k in ("question", "answer", "reason", "status")).lower()
+                score = sum(1 for t in terms if t in hay)
+                if score:
+                    hits.append((score, row))
+    except Exception:
+        pass
+    if not hits:
+        return ""
+    hits.sort(key=lambda pair: -pair[0])
+    lines = [
+        "Learning gaps relevant to this question:",
+        "These are unresolved known-unknowns. Do not present them as facts; use them to explain what still needs investigation.",
+    ]
+    seen = set()
+    for _, row in hits[:limit]:
+        q = str(row.get("question") or "").strip()
+        if not q or q.lower() in seen:
+            continue
+        seen.add(q.lower())
+        lines.append(
+            f"\nGAP: {q}\nSTATUS: {row.get('status', 'needs-investigation')}\nREASON: {row.get('reason', '')}\nRECORDED: {row.get('ts', '')}"
+        )
+    return "\n".join(lines)[:5000] if len(lines) > 2 else ""
 
 
 def record_learning_gap(question: str, answer: str = "", reason: str = "unknown") -> None:
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
+    LEARNING_GAPS_DIR.mkdir(parents=True, exist_ok=True)
     row = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "question": (question or "")[:1000],
@@ -285,6 +327,30 @@ def record_learning_gap(question: str, answer: str = "", reason: str = "unknown"
     }
     with LEARNING_DEBT.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+    slug = "-".join(sorted(_terms(row["question"]))[:10]) or f"gap-{int(time.time())}"
+    path = LEARNING_GAPS_DIR / f"{int(time.time())}-{slug[:80]}.md"
+    path.write_text(
+        "\n".join([
+            "# Learning gap",
+            "",
+            f"- Status: {row['status']}",
+            f"- Reason: {row['reason']}",
+            f"- Recorded: {row['ts']}",
+            "",
+            "## Question",
+            "",
+            row["question"],
+            "",
+            "## Last answer",
+            "",
+            row["answer"],
+        ]).strip() + "\n",
+        encoding="utf-8",
+    )
+    try:
+        refresh_index(force=True)
+    except Exception:
+        pass
     queue_learning_question(question, reason)
 
 

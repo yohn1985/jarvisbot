@@ -330,7 +330,12 @@ def _discovery():
     only the important ones (INDEX + per-host discovery docs); the many answered-question notes stay
     available (reachable via links in INDEX) but don't clutter the left rail."""
     items = []   # (path, primary)
-    for d, primary in ((ROOT / "workspace" / "discovery", True), (ROOT / "workspace" / "knowledge", False)):
+    for d, primary in (
+        (ROOT / "workspace" / "discovery", True),
+        (ROOT / "workspace" / "knowledge" / "learned", True),
+        (ROOT / "workspace" / "knowledge" / "learning-gaps", True),
+        (ROOT / "workspace" / "knowledge", False),
+    ):
         if d.exists():
             items += [(p, primary) for p in d.glob("*.md")]
     # INDEX first, then primary discovery docs, then notes; newest within each group
@@ -345,7 +350,12 @@ def _discovery():
             continue
         seen.add(p.name)
         try:
-            out.append({"name": p.name, "content": p.read_text(), "primary": primary or p.name == "INDEX.md"})
+            label = p.name
+            if p.parent.name == "learned":
+                label = "memory/" + label
+            elif p.parent.name == "learning-gaps":
+                label = "gap/" + label
+            out.append({"name": label, "content": p.read_text(), "primary": primary or p.name == "INDEX.md"})
         except Exception:
             pass
     return out[:60]

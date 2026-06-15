@@ -51,6 +51,9 @@ def default_cwd() -> Path:
 MAX_OUTPUT = 12000
 READ_LIMIT = 20000
 MAX_TOOL_STEPS = 5
+MODE_SHADOW = "shadow"
+MODE_ASSIST = "assist"
+MODE_AUTONOMOUS = "autonomous"
 
 _DANGEROUS = re.compile(
     r"(^|[;&|]\s*|\s)("
@@ -88,6 +91,29 @@ _PROTECTED_WRITE_PREFIXES = (
 )
 
 
+def current_mode() -> str:
+    try:
+        import yaml
+        cfg = yaml.safe_load((ROOT / "config.yaml").read_text()) if (ROOT / "config.yaml").exists() else {}
+        mode = str((((cfg or {}).get("identity") or {}).get("mode") or MODE_SHADOW)).strip().lower()
+    except Exception:
+        mode = MODE_SHADOW
+    if mode == "assisted":
+        mode = MODE_ASSIST
+    if mode not in {MODE_SHADOW, MODE_ASSIST, MODE_AUTONOMOUS}:
+        mode = MODE_SHADOW
+    return mode
+
+
+def mode_description() -> str:
+    mode = current_mode()
+    if mode == MODE_AUTONOMOUS:
+        return "autonomous: local-safe actions allowed without owner wording; destructive/system/provider actions still blocked"
+    if mode == MODE_ASSIST:
+        return "assist: local writes require explicit owner edit intent or slash command"
+    return "shadow: observe and report only; writes/actions are blocked"
+
+
 TOOL_PROTOCOL = """Local tools are available through Jarvis, independent of the selected model provider.
 If you need local evidence or need to perform an explicitly requested file change, reply with exactly one JSON object and no prose:
 {"tool":"shell","args":{"cmd":"uptime"}}
@@ -99,7 +125,7 @@ If you need local evidence or need to perform an explicitly requested file chang
 Rules:
 - Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
 - shell is read-only and blocks destructive or mutating commands.
-- write/append are allowed only when the owner explicitly asked to change/create/document/save something.
+- write/append obey the configured mode: shadow blocks writes, assist requires explicit owner edit intent, autonomous allows local-safe writes.
 - If no tool is needed, reply exactly: NO_TOOL"""
 
 
@@ -134,6 +160,17 @@ def shell_safety_error(cmd: str) -> str | None:
 
 def owner_allows_write(owner_text: str) -> bool:
     return bool(_EDIT_INTENT.search(owner_text or ""))
+
+
+def write_allowed(owner_text: str = "", explicit: bool = False) -> tuple[bool, str]:
+    mode = current_mode()
+    if mode == MODE_AUTONOMOUS:
+        return True, ""
+    if mode == MODE_ASSIST and (explicit or owner_allows_write(owner_text)):
+        return True, ""
+    if mode == MODE_ASSIST:
+        return False, "assist mode requires explicit owner edit intent for writes"
+    return False, "shadow mode is observe-only; writes are blocked"
 
 
 def run_shell(cmd: str, timeout: int = 30) -> dict:
@@ -175,6 +212,8 @@ def run_codex(task: str, timeout: int = 300) -> dict:
     task = (task or "").strip()
     if not task:
         return {"ok": False, "tool": "codex", "error": "usage: /codex <task>"}
+    if current_mode() == MODE_SHADOW:
+        return {"ok": False, "tool": "codex", "error": "blocked in shadow mode; switch to assist/autonomous for full agent execution"}
     fd, final_path = tempfile.mkstemp(prefix="jarvis-codex-final-", suffix=".txt")
     os.close(fd)
     try:
@@ -239,8 +278,11 @@ def read_file(path: str) -> dict:
         return {"ok": False, "tool": "read", "path": raw, "error": str(e)[:300]}
 
 
-def write_file(path: str, content: str, append: bool = False) -> dict:
+def write_file(path: str, content: str, append: bool = False, owner_text: str = "", explicit: bool = False) -> dict:
     raw = _clean_cmd(path)
+    allowed, reason = write_allowed(owner_text, explicit=explicit)
+    if not allowed:
+        return {"ok": False, "tool": "write", "path": raw, "error": reason}
     try:
         p = Path(raw).expanduser()
         if not p.is_absolute():
@@ -298,9 +340,8 @@ def run_model_tool(call: dict, owner_text: str) -> dict:
     if tool == "search":
         return search(str(args.get("pattern") or ""), str(args.get("path") or default_cwd()))
     if tool in ("write", "append"):
-        if not owner_allows_write(owner_text):
-            return {"ok": False, "tool": "write", "error": "write/append requires explicit owner edit intent"}
-        return write_file(str(args.get("path") or ""), str(args.get("content") or ""), append=(tool == "append"))
+        return write_file(str(args.get("path") or ""), str(args.get("content") or ""),
+                          append=(tool == "append"), owner_text=owner_text)
     return {"ok": False, "tool": tool or "unknown", "error": "unknown tool"}
 
 
@@ -369,7 +410,7 @@ def parse_slash(text: str) -> dict | None:
         path, sep, content = rest.partition("\n")
         if not sep:
             return {"ok": False, "tool": "write", "error": f"usage: /{name} <path> then newline then content"}
-        return write_file(path.strip(), content, append=(name == "append"))
+        return write_file(path.strip(), content, append=(name == "append"), explicit=True)
     if name == "search":
         argv = shlex.split(rest) if rest else []
         if not argv:
@@ -413,4 +454,9 @@ BUILTIN_HELP = """/shell <command>  run a read-only shell command
 Shortcut examples:
 !uptime
 give me the uptime
-run hostname"""
+run hostname
+
+Mode guardrails:
+shadow = observe only
+assist = edits only on explicit request
+autonomous = local-safe actions allowed; destructive/system/provider actions still blocked"""
