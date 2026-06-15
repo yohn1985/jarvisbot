@@ -574,9 +574,20 @@ def _chat_reply(conv):
         ident = cfg.get("identity") or {}
         name = ident.get("name", "Jarvis")
         from jarvis import persona
+        from jarvis import local_knowledge
         env = _env_context()
+        remembered_roots = local_knowledge.remember_roots_from_text(last, cfg)
+        local_docs = local_knowledge.retrieve(last, cfg)
         base = (persona.system(cfg) + " You're chatting with the owner in your dashboard."
                 + (f"\n\nWhat you've discovered about your environment:\n{env}\n" if env else "")
+                + (f"\n\nLocal documentation evidence:\n{local_docs}\n" if local_docs else "")
+                + ("\n\nThe owner gave you documentation path(s) that were durably remembered: "
+                   + ", ".join(remembered_roots) + "\n" if remembered_roots else "")
+                + "\n\nYou do not have implicit shell access in ordinary chat. Do not claim you ran "
+                  "commands, scanned files, indexed folders, or remembered facts unless a slash-skill "
+                  "output, local documentation evidence, or durable memory in this prompt proves it. "
+                  "If the owner expects you to know something and the evidence is missing, say you need "
+                  "to document the gap and create a learning record.\n"
                 + f"\nConversation so far:\n{transcript}\n")
         # 1) MULTI-TURN: a fast cheap-model decision on whether live web facts are needed; if so, post a
         #    visible status message and gather evidence before answering (Jarvis works out loud).
@@ -639,6 +650,10 @@ def _chat_reply(conv):
         messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"])
         st.emit("done", full)
         _stream_close(conv)
+        try:
+            local_knowledge.maybe_record_learning_gap(last, full or buf["t"], bool(local_docs))
+        except Exception:
+            pass
         try:
             from jarvis import feedback
             feedback.record(cfg, kind=("chat+web" if used_web else "chat"), area=conv,
