@@ -623,16 +623,25 @@ def _chat_reply(conv):
         ident = cfg.get("identity") or {}
         name = ident.get("name", "Jarvis")
         from jarvis import harness
+        mid = messaging.stream_start(conv)
+        buf = {"t": "", "th": "", "last": 0.0}
+
+        def status_note(text):
+            line = f"Harness: {text}\n"
+            buf["th"] += line
+            st.emit("status", text)
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
+
         env = _env_context()
-        st.emit("status", "grounding in operating prompt and local context...")
+        status_note("grounding in operating prompt and local context...")
         hctx = harness.build_context(cfg, msgs, last, env_context=env)
         base = hctx["base"]
         local_docs = hctx.get("local_docs", "")
         srcs = hctx.get("context_sources") or []
         if srcs:
-            st.emit("status", "grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
+            status_note("grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
         else:
-            st.emit("status", "grounded in operating prompt; no local context files found")
+            status_note("grounded in operating prompt; no local context files found")
         # 1) MULTI-TURN: a fast cheap-model decision on whether live web facts are needed; if so, post a
         #    visible status message and gather evidence before answering (Jarvis works out loud).
         web_ctx, used_web = "", False
@@ -642,7 +651,7 @@ def _chat_reply(conv):
                  "2024", "2025", "2026", "http", "github", "docs", "weather", "who won", "stock")
         decide = "NO"
         if any(h in last.lower() for h in _hint):
-            st.emit("status", "checking whether I need the web…")   # show activity during the triage call
+            status_note("checking whether I need the web...")
             try:
                 decide = llm.run("triage", base +
                     "\nDoes answering the latest owner message require CURRENT EXTERNAL web facts (software "
@@ -653,21 +662,18 @@ def _chat_reply(conv):
                 decide = "NO"
         if decide.upper().startswith("SEARCH:"):
             query = decide.split(":", 1)[1].strip()[:160]
-            st.emit("status", f"checking the web: {query}")
+            status_note(f"checking the web: {query}")
             try:
                 ans, results = _web_skill().research(query, llm)
                 src = "\n".join("- " + r.get("url", "") for r in (results or [])[:3])
                 web_ctx, used_web = (ans + (f"\n\nSOURCES:\n{src}" if src else "")), True
             except Exception:
                 web_ctx = ""
-        tool_ctx = harness.collect_tool_evidence(llm, base, last, status=lambda text: st.emit("status", text))
+        tool_ctx = harness.collect_tool_evidence(llm, base, last, status=status_note)
         if tool_ctx:
-            st.emit("status", "summarizing from gathered evidence...")
+            status_note("summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
-        mid = messaging.stream_start(conv)
-        buf = {"t": "", "th": "", "last": 0.0}
-
         def on_delta(kind, d):
             if kind == "thinking":
                 buf["th"] += d
@@ -697,7 +703,7 @@ def _chat_reply(conv):
         if st.cancelled:
             full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
         try:
-            st.emit("status", "reflecting and updating memory if needed...")
+            status_note("reflecting and updating memory if needed...")
             harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
         except Exception:
             pass
