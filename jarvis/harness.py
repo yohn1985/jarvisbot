@@ -264,7 +264,7 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
             break
         if status:
             try:
-                status(f"running {call.get('tool')} tool...")
+                status(tool_status(call))
             except Exception:
                 pass
         result = chat_tools.run_model_tool(call, latest)
@@ -272,6 +272,30 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
         if call.get("tool") in ("write", "append", "edit"):
             break
     return "\n\n".join(evidence)
+
+
+def tool_status(call: dict) -> str:
+    """Human-visible progress text for the live worklog."""
+    tool = (call or {}).get("tool") or "tool"
+    args = (call or {}).get("args") or {}
+    if tool == "shell":
+        cmd = str(args.get("cmd") or "").strip()
+        return f"checking shell: {cmd[:90]}" if cmd else "checking shell"
+    if tool == "read":
+        path = str(args.get("path") or "").strip()
+        return f"reading {path[:100]}" if path else "reading file"
+    if tool == "search":
+        pat = str(args.get("pattern") or "").strip()
+        path = str(args.get("path") or "").strip()
+        return f"searching {path or 'workspace'} for {pat[:70]}" if pat else "searching files"
+    if tool == "edit":
+        path = str(args.get("path") or "").strip()
+        return f"editing {path[:100]}" if path else "editing file"
+    if tool in ("write", "append"):
+        path = str(args.get("path") or "").strip()
+        action = "appending to" if tool == "append" else "writing"
+        return f"{action} {path[:100]}" if path else f"{action} file"
+    return f"running {tool} tool"
 
 
 def repair_unexecuted_command_plan(llm, latest: str, answer_text: str, thinking_text: str = "",
