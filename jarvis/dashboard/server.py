@@ -624,9 +624,15 @@ def _chat_reply(conv):
         name = ident.get("name", "Jarvis")
         from jarvis import harness
         env = _env_context()
+        st.emit("status", "grounding in operating prompt and local context...")
         hctx = harness.build_context(cfg, msgs, last, env_context=env)
         base = hctx["base"]
         local_docs = hctx.get("local_docs", "")
+        srcs = hctx.get("context_sources") or []
+        if srcs:
+            st.emit("status", "grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
+        else:
+            st.emit("status", "grounded in operating prompt; no local context files found")
         # 1) MULTI-TURN: a fast cheap-model decision on whether live web facts are needed; if so, post a
         #    visible status message and gather evidence before answering (Jarvis works out loud).
         web_ctx, used_web = "", False
@@ -655,6 +661,8 @@ def _chat_reply(conv):
             except Exception:
                 web_ctx = ""
         tool_ctx = harness.collect_tool_evidence(llm, base, last, status=lambda text: st.emit("status", text))
+        if tool_ctx:
+            st.emit("status", "summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
         mid = messaging.stream_start(conv)
@@ -675,7 +683,8 @@ def _chat_reply(conv):
                   + ("\nThe owner attached image(s) below — examine them to answer." if img_paths else "")
                   + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
                   "that fully conveys the essence — no preamble, filler, restating the question, or "
-                  "sign-off. Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
+                  "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
+                  "process narration. Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
                   f"code in code blocks.\n\n{name}:")
         try:
             full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
@@ -687,13 +696,14 @@ def _chat_reply(conv):
                 full = f"(couldn't reach my brain: {str(e2)[:120]})"
         if st.cancelled:
             full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
-        messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"])
-        st.emit("done", full)
-        _stream_close(conv)
         try:
+            st.emit("status", "reflecting and updating memory if needed...")
             harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
         except Exception:
             pass
+        messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"])
+        st.emit("done", full)
+        _stream_close(conv)
         try:
             from jarvis import feedback
             feedback.record(cfg, kind=("chat+web" if used_web else "chat"), area=conv,

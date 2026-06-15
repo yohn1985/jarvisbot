@@ -74,6 +74,22 @@ def _read_project_hints(cfg: dict) -> str:
     return "\n\n".join(chunks)[:MAX_CONTEXT_BYTES]
 
 
+def context_sources(cfg: dict) -> list[str]:
+    """Visible grounding sources for the dashboard status line."""
+    sources: list[str] = []
+    for root in _cfg_roots(cfg):
+        for rel in PROJECT_HINT_FILES:
+            path = root / rel
+            try:
+                if path.exists() and path.is_file():
+                    sources.append(str(path))
+            except Exception:
+                continue
+        if len(sources) >= 8:
+            break
+    return sources[:8]
+
+
 def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str = "") -> dict:
     """Build the prompt base from the editable operating prompt plus discovered evidence."""
     remembered_roots = local_knowledge.remember_roots_from_text(latest, cfg)
@@ -107,6 +123,7 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         "local_docs": local_docs,
         "remembered_roots": remembered_roots,
         "project_hints": project_hints,
+        "context_sources": context_sources(cfg),
     }
 
 
@@ -176,6 +193,36 @@ def reflect_and_learn(llm, cfg: dict, owner_text: str, answer_text: str,
         local_knowledge.maybe_record_learning_gap(owner_text, answer_text, bool(local_docs or tool_evidence))
     except Exception:
         pass
+    owner_low = (owner_text or "").lower()
+    answer_low = (answer_text or "").lower()
+    explicit_learn = any(s in owner_low for s in (
+        "remember this", "learn this", "document this", "so next time", "next time know",
+        "you should know", "add this to memory", "save this"
+    ))
+    correction = any(s in owner_low for s in (
+        "wrong", "incorrect", "not true", "you missed", "that's not", "that is not",
+        "you forgot", "you failed"
+    ))
+    weak_answer = any(s in answer_low for s in (
+        "i don't know", "i do not know", "not aware", "no evidence", "missing",
+        "don't have", "do not have"
+    ))
+    if explicit_learn or correction:
+        try:
+            local_knowledge.record_learned_memory(
+                owner_text[:1600],
+                source="owner",
+                scope="project",
+                keywords=sorted(list(local_knowledge._terms(owner_text)))[:12],
+                evidence=(tool_evidence or local_docs or "Owner instruction/correction")[:2000],
+            )
+        except Exception:
+            pass
+    if weak_answer and not (local_docs or tool_evidence):
+        try:
+            local_knowledge.record_learning_gap(owner_text, answer_text, "missing-evidence-after-answer")
+        except Exception:
+            pass
     prompt = (
         "You are Jarvis's memory reflection step. Decide whether this turn produced a durable memory.\n"
         "Only learn from owner corrections/instructions, local docs, or tool evidence. Do not memorize model guesses.\n"
