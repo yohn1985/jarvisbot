@@ -325,7 +325,7 @@ function md(t){
   h=h.replace(/@@CB(\d+)@@/g,(m,i)=>codeBlockHTML(blocks[+i]));   // restore fenced code blocks
   return h;
 }
-// split a model reply into its thinking (<think>/<thinking>) and the visible body (ported from leedcode)
+// split a model reply into its thinking (<think>/<thinking>) and the visible body
 function splitThinking(text){
   let think='';
   const body=(text||'').replace(/<(think|thinking)>([\s\S]*?)<\/\1>/gi,(m,_t,c)=>{ think+=(think?'\n\n':'')+c.trim(); return ''; });
