@@ -523,6 +523,18 @@ dash_token(){ local f="$ROOT/state/dashboard_token"; mkdir -p "$ROOT/state"
   cat "$f"; }
 dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:${PORT}/?token=$(dash_token)"; }
 
+# A loud, hard-to-miss login banner — printed at the very END of setup so the URL isn't lost in scroll.
+login_banner(){ # $1 = login url, $2 = dir (for the re-print hint)
+  local url="$1" dir="${2:-$ROOT}" bar='══════════════════════════════════════════════════════════════════'
+  printf '\n\033[32m%s\033[0m\n' "$bar"
+  printf '  \033[1;32m✓  JARVIS IS READY — open this link to log in:\033[0m\n\n'
+  printf '      \033[1;36m%s\033[0m\n\n' "$url"
+  printf '  The link contains your private access token — keep it private.\n'
+  printf '  Re-print it any time:  \033[2mcd %s && ./install.sh url\033[0m\n' "$dir"
+  printf '  Repo: github.com/yohn1985/jarvisbot   ·   Docs: jarvisbot.app\n'
+  printf '\033[32m%s\033[0m\n\n' "$bar"
+}
+
 # Bring the dashboard up (stdlib only — works before any deps/brain exist) so the owner has a
 # place to watch Jarvis and answer its setup questions. Backgrounded + detached; the durable
 # systemd service is installed later via the approved plan.
@@ -543,9 +555,8 @@ land(){
   dashboard_up
   "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.bootstrap import preflight;r=preflight.run(load());print('[jarvis] preflight: ready=%s asked=%s'%(r['ready'],r['asked']))" 2>/dev/null || true
   echo
-  log "Jarvis is up. Continue in your browser:"
-  printf '\n    \033[36m%s\033[0m\n\n' "$(dash_url)"
-  log "Open that page to finish setup — approve installs and give Jarvis its AI brain."
+  log "Finish setup in the dashboard — give Jarvis its AI brain."
+  login_banner "$(dash_url)" "$ROOT"
 }
 
 # Make Jarvis durable: a dedicated least-privilege 'jarvis' user, scoped (or yolo) sudoers, the
@@ -610,7 +621,11 @@ EOF
   pkill -f "dashboard/server.py" 2>/dev/null || true
   sleep 1
   systemctl enable --now jarvis-loop.service jarvis-dashboard.service
-  log "service installed + enabled (survives reboot). dashboard: $(dash_url)"
+  log "service installed + enabled (survives reboot)."
+  # build the URL from the SERVICE's own token (the one it actually validates), not $ROOT's.
+  local ip dburl; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  dburl="http://${ip:-127.0.0.1}:${PORT}/?token=$(cat "$DIR/state/dashboard_token" 2>/dev/null)"
+  login_banner "$dburl" "$DIR"
 }
 
 case "${1:-up}" in
@@ -630,7 +645,7 @@ case "${1:-up}" in
   rollback) "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import rollback;print('rolled back' if rollback('${2:-}') else 'failed')";;
   skill)    shift; skill_cmd "$@";;
   dashboard) shift; "$(pybin)" "$ROOT/jarvis/dashboard/server.py" "$@";;
-  url|login) printf '\n  Open Jarvis (this link includes your access token — keep it private):\n\n    \033[36m%s\033[0m\n\n' "$(dash_url)";;  # re-print the login link any time
+  url|login) login_banner "$(dash_url)" "$ROOT";;   # re-print the login link any time
   token)    cat "$ROOT/state/dashboard_token" 2>/dev/null || die "no token yet — run ./install.sh up";;
   doctor)   doctor;;
   *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|dashboard|doctor)";;

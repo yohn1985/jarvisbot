@@ -19,6 +19,10 @@ learns its world, and works for you.**
 
 [Website](https://jarvisbot.app) · [Wiki](https://github.com/yohn1985/jarvisbot/wiki)
 
+<br>
+
+![Jarvis — the welcome screen and guided setup](docs/welcome.png)
+
 </div>
 
 > ⚠️ **Early beta.** Jarvis can read, reason, and act on a real machine. Run it on a box you
