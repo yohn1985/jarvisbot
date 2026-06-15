@@ -145,10 +145,15 @@ def fast_local_answer(latest: str, local_docs: str) -> str:
     """Answer simple local-memory lookups without the full model loop."""
     text = local_docs or ""
     low = (latest or "").lower()
-    asks_memory = any(s in low for s in (
-        "what do you know", "do you know", "are you aware", "what is", "what's",
-        "where is", "where's", "where are", "where do"
+    explicit_recall = any(s in low for s in (
+        "do you remember", "what did you learn", "what have you learned",
+        "learned memory", "your memory", "known gap", "learning gap",
     ))
+    knowledge_probe = any(s in low for s in ("do you know", "are you aware", "what do you know"))
+    has_non_memory_evidence = any(s in text for s in (
+        "SOURCE:", "Code index hits relevant to this question:", "Operational index hits relevant to this question:",
+    ))
+    asks_memory = explicit_recall or (knowledge_probe and not has_non_memory_evidence)
     if asks_memory and "Learned memories relevant to this question:" in text:
         mem = re.search(r"MEMORY:\s*(.+?)(?:\nSCOPE:|\Z)", text, re.S)
         if mem:
