@@ -697,6 +697,8 @@ def _chat_reply(conv):
             messaging.stream_update(mid, buf["t"], thinking=buf["th"])
 
         env = _env_context()
+        if harness.learn_owner_correction_now(last):
+            status_note("learned explicit owner correction before answering")
         status_note("grounding in operating prompt and local context...")
         hctx = harness.build_context(cfg, msgs, last, env_context=env)
         base = hctx["base"]

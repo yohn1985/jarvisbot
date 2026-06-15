@@ -698,7 +698,7 @@ function renderLive(){
   let row=cl.querySelector('[data-mid="sse-live"]');
   if(!row){ cl.insertAdjacentHTML('beforeend','<div class="row jrow" data-mid="sse-live"><div class="msg jarvis"></div></div>'); row=cl.querySelector('[data-mid="sse-live"]'); }
   const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,streaming:true};
-  const statusLine=(_live.status && !_live.tx)?`<div class="thinking-live"><span class="thdot pulse"></span>${esc(_live.status)}</div>`:'';
+  const statusLine=_live.status?`<div class="thinking-live"><span class="thdot pulse"></span>${esc(_live.status)}</div>`:'';
   row.querySelector('.msg').innerHTML=statusLine+renderBody(m);
   const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
   if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;

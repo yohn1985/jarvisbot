@@ -75,9 +75,11 @@ def run(base: str, token: str) -> dict:
     _ask(base, token, conv, correction)
     fresh = f"selftest-memory-fresh-{ts}"
     answer = _ask(base, token, fresh, f"what is the {canary} marker?")
+    low_answer = answer.lower()
     cases.append(_case(
         "correction persists across fresh conversation",
-        canary in answer and "durable correction recall" in answer,
+        canary in answer and "durable correction recall" in low_answer
+        and "no evidence" not in low_answer and "unresolved" not in low_answer and "similar marker" not in low_answer,
         answer,
     ))
 

@@ -179,6 +179,30 @@ def compact_evidence(text: str, limit: int = 4500) -> str:
     return "\n".join(lines)[-limit:]
 
 
+def learn_owner_correction_now(owner_text: str) -> bool:
+    """Persist explicit owner corrections before the next fresh conversation can ask about them."""
+    text = (owner_text or "").strip()
+    low = text.lower()
+    if not any(s in low for s in (
+        "correction:", "that was wrong", "that's wrong", "that is wrong",
+        "you were wrong", "you got that wrong", "actually,"
+    )):
+        return False
+    fact = re.sub(r"^\s*correction:\s*", "", text, flags=re.I).strip()
+    if len(fact) < 8:
+        return False
+    try:
+        return local_knowledge.record_learned_memory(
+            fact,
+            source="owner-correction",
+            scope="project",
+            keywords=sorted(list(local_knowledge._terms(fact)))[:12],
+            evidence=text[:2000],
+        )
+    except Exception:
+        return False
+
+
 def likely_needs_tools(text: str) -> bool:
     low = (text or "").lower()
     hints = (
