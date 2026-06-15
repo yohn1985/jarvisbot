@@ -129,9 +129,12 @@ def _ask_brain(cfg: dict) -> str:
             "conversation, then Re-check.")
 
 
-# (key, label, required, check_fn, ask_fn)
+# (key, label, required, check_fn, ask_fn, chat_question)
+# chat_question=False => surfaced ONLY via the dashboard Setup card's brain chooser
+# (Claude/Codex/Ollama -> run the command -> Re-check), NOT as a generic chat Q&A. A bare
+# "answer" textbox for what is really "go run a command" confused users ("answer what?").
 REQUIREMENTS = [
-    ("brain", "AI brain (responds)", True, check_brain, _ask_brain),
+    ("brain", "AI brain (responds)", True, check_brain, _ask_brain, False),
 ]
 
 
@@ -195,7 +198,7 @@ def status(cfg: dict) -> dict:
     """Read-only snapshot of the requirement checks — no asking, no state writes. For the
     dashboard setup checklist."""
     checks, ready = [], True
-    for key, label, required, check_fn, ask_fn in REQUIREMENTS:
+    for key, label, required, check_fn, ask_fn, _chat_q in REQUIREMENTS:
         try:
             ok, detail = check_fn(cfg)
         except Exception as e:
@@ -215,7 +218,7 @@ def status(cfg: dict) -> dict:
 def run(cfg: dict) -> dict:
     st = _load_state()
     checks, asked, resolved, ready = [], [], [], True
-    for key, label, required, check_fn, ask_fn in REQUIREMENTS:
+    for key, label, required, check_fn, ask_fn, chat_question in REQUIREMENTS:
         try:
             ok, detail = check_fn(cfg)
         except Exception as e:
@@ -227,7 +230,7 @@ def run(cfg: dict) -> dict:
         else:
             if required:
                 ready = False
-            if _ask(key, ask_fn(cfg), st):
+            if chat_question and _ask(key, ask_fn(cfg), st):
                 asked.append(key)
     _save_state(st)
     return {"ready": ready, "checks": checks, "asked": asked, "resolved": resolved}

@@ -355,7 +355,7 @@ deps(){
   else
     warn "  no docker (optional) — Jarvis runs on the local jsonl ledger without it"
   fi
-  for c in claude codex ollama; do command -v "$c" >/dev/null 2>&1 && log "  ok   $c (LLM backend)" || warn "  missing $c CLI (optional backend)"; done
+  for c in claude codex ollama; do have_cli "$c" && log "  ok   $c (LLM backend)" || warn "  missing $c CLI (optional backend)"; done
   [ -f "$ROOT/config.yaml" ] && log "  ok   config.yaml" || warn "  no config.yaml yet (copy from config.example.yaml)"
   [ -f "$ROOT/.env" ] && log "  ok   .env" || warn "  no .env yet (copy from .env.example, add secrets)"
   if [ "$install" = "--install" ] && [ "${#missing[@]}" -gt 0 ]; then
@@ -400,6 +400,18 @@ ask_choice(){ # ask_choice "Question" defaultN ENVVAR opt1 opt2 ...  -> echoes t
   printf '%s' "${opts[$((n-1))]}"
 }
 
+# Detect a CLI even when it isn't on the install-time PATH (curl|bash runs a non-login shell, so
+# tools in ~/.local/bin, npm-global, snap, brew etc. can be invisible). Check PATH, the login PATH,
+# and common install dirs.
+have_cli(){
+  command -v "$1" >/dev/null 2>&1 && return 0
+  bash -lc "command -v $1" >/dev/null 2>&1 && return 0
+  local d; for d in "$HOME/.local/bin" /usr/local/bin /snap/bin "$HOME/.ollama/bin" /home/linuxbrew/.linuxbrew/bin; do
+    [ -x "$d/$1" ] && return 0
+  done
+  return 1
+}
+
 # Write the guided choices into config.yaml (string edits — no PyYAML needed at install time;
 # config is only READ once PyYAML is present, so this safely takes effect when deps land).
 apply_config(){
@@ -424,9 +436,11 @@ guided(){
 
   G_OWNER="$(ask 'Your name or handle' "${USER:-you}" JARVIS_OWNER)"
 
-  local rundef=1; [ "$(id -u)" -eq 0 ] && rundef=2
-  local run; run="$(ask_choice 'How should Jarvis run?' "$rundef" JARVIS_RUN 'foreground cockpit (~/jarvisbot, no root)' 'durable system service (/opt/jarvis, needs root)')"
-  case "$run" in durable*|service|2) G_RUN=service;; *) G_RUN=foreground;; esac
+  # Default = the full-capability install. Jarvis is meant to DO things (install packages, manage
+  # services); the behavioral brakes are autonomy mode (shadow) + action_classes, not crippled OS
+  # access. Pick the foreground cockpit if you'd rather keep it rootless.
+  local run; run="$(ask_choice 'How should Jarvis run?' 1 JARVIS_RUN 'durable system service (/opt/jarvis, full capability — recommended)' 'foreground cockpit (~/jarvisbot, no root)')"
+  case "$run" in foreground*|cockpit|2) G_RUN=foreground;; *) G_RUN=service;; esac
 
   local m; m="$(ask_choice 'Autonomy level' 1 JARVIS_MODE 'shadow — propose-only (recommended)' 'assist' 'autonomous')"
   G_MODE="$(printf '%s' "$m" | awk '{print $1}')"
@@ -437,14 +451,14 @@ guided(){
   case "$mem" in Docker*|docker|1) G_MEM=docker;; *) G_MEM=ledger;; esac
   [ "$G_MEM" = docker ] && [ "$have_docker" -eq 0 ] && { warn "Docker unavailable — using the local jsonl ledger instead."; G_MEM=ledger; }
 
-  local opts=(); command -v claude >/dev/null 2>&1 && opts+=('claude (Claude CLI)'); command -v codex >/dev/null 2>&1 && opts+=('codex (Codex CLI)'); command -v ollama >/dev/null 2>&1 && opts+=('ollama (local)'); opts+=('set up later in the dashboard')
+  local opts=(); have_cli claude && opts+=('claude (Claude CLI)'); have_cli codex && opts+=('codex (Codex CLI)'); have_cli ollama && opts+=('ollama (local)'); opts+=('set up later in the dashboard')
   local brain; brain="$(ask_choice 'Main AI brain' 1 JARVIS_BRAIN "${opts[@]}")"
   case "$brain" in claude*) G_BRAIN=claude;; codex*) G_BRAIN=codex;; ollama*) G_BRAIN=ollama;; *) G_BRAIN=later;; esac
 
   G_SUDO=scoped; G_PORT="$PORT"
   if [ "$G_RUN" = service ]; then
-    local s; s="$(ask_choice 'sudo scope for the jarvis service user' 1 JARVIS_SUDO 'scoped — apt-get + systemctl only (recommended)' 'full root')"
-    case "$s" in full*|yolo) G_SUDO=yolo;; *) G_SUDO=scoped;; esac
+    local s; s="$(ask_choice 'sudo access for the jarvis user' 1 JARVIS_SUDO 'full root (recommended — Jarvis needs it to do real work)' 'scoped — apt-get + systemctl only')"
+    case "$s" in scoped*|2) G_SUDO=scoped;; *) G_SUDO=yolo;; esac
     G_PORT="$(ask 'Dashboard port' "$PORT" JARVIS_PORT)"; PORT="$G_PORT"
   fi
 
@@ -539,7 +553,7 @@ land(){
 # Privileged — run as root (interactive first-run), NOT from the dashboard (it stops the loop/dash).
 install_service(){
   [ "$(id -u)" -eq 0 ] || die "install-service must run as root (sudo ./install.sh install-service)"
-  local U=jarvis DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" MODE="${JARVIS_SUDO:-scoped}"
+  local U=jarvis DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" MODE="${JARVIS_SUDO:-yolo}"
   command -v systemctl >/dev/null 2>&1 || die "no systemd (systemctl) on this host"
   log "install-service: user=$U dir=$DIR sudo=$MODE"
   id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$DIR" --shell /usr/sbin/nologin "$U"
