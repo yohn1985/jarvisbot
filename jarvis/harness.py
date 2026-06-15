@@ -245,6 +245,14 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
     if not likely_needs_tools(latest):
         return ""
     evidence = []
+    for call in planned_tool_calls(latest):
+        if status:
+            try:
+                status(tool_status(call))
+            except Exception:
+                pass
+        result = chat_tools.run_model_tool(call, latest)
+        evidence.append(chat_tools.format_result(result))
     for _ in range(chat_tools.MAX_TOOL_STEPS):
         prompt = (
             base
@@ -272,6 +280,27 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
         if call.get("tool") in ("write", "append", "edit"):
             break
     return "\n\n".join(evidence)
+
+
+def planned_tool_calls(latest: str) -> list[dict]:
+    """Deterministic first-pass probes for broad local status questions.
+
+    Models are still free to ask for more tools after this, but common status questions should
+    start from reality instead of model-invented checklists.
+    """
+    low = (latest or "").lower()
+    if not any(w in low for w in ("status", "doing", "stuck", "running", "health", "pipeline", "worker", "service", "timer")):
+        return []
+    calls: list[dict] = [
+        {"tool": "shell", "args": {"cmd": "pwd; hostname; hostname -I 2>/dev/null; date"}},
+    ]
+    if any(w in low for w in ("pipeline", "worker", "agent", "service", "timer", "deploy", "review", "finder", "fixer", "stuck")):
+        calls.extend([
+            {"tool": "shell", "args": {"cmd": "systemctl list-timers --all --no-pager | sed -n '1,180p'"}},
+            {"tool": "shell", "args": {"cmd": "systemctl list-units --type=service --all --no-pager | sed -n '1,220p'"}},
+            {"tool": "shell", "args": {"cmd": "ps -eo pid,etime,cmd --sort=etime | grep -Ei 'jarvis|agent|worker|pipeline|deploy|review|finder|fixer' | grep -v grep | tail -80 || true"}},
+        ])
+    return calls[:4]
 
 
 def tool_status(call: dict) -> str:
