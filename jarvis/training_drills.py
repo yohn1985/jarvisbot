@@ -200,6 +200,51 @@ def run(base: str, token: str) -> dict:
         ),
     ))
 
+    multi_path = Path(f"/tmp/jarvis-selftest-multiturn-route-{ts}.py")
+    multi_path.write_text(_sample_incident_module(), encoding="utf-8")
+    conv = f"selftest-multiturn-code-edit-{ts}"
+    first = _ask_message(
+        base,
+        token,
+        conv,
+        (
+            f"Modify the existing Python file {multi_path}. Change only route_incident "
+            "so billing, payments, or subscription incidents with high or critical severity "
+            "return finance-oncall before generic critical routing. Do not use exact "
+            "replacement text from me. After editing, tell me what changed."
+        ),
+        timeout=240,
+    )
+    follow = _ask_message(
+        base,
+        token,
+        conv,
+        (
+            "In the previous turn, what exact file did you edit, what route behavior changed, "
+            "and what evidence from that prior turn proves it? Do not redo the edit."
+        ),
+        timeout=180,
+    )
+    routed_low, routed_high, routed_critical = _load_route_values(multi_path)
+    first_trace = (first.get("thinking") or "") + "\n" + (first.get("evidence") or "")
+    follow_text = follow.get("text") or ""
+    cases.append(_case(
+        "multi-turn follow-up carries real edit evidence",
+        routed_low == "product-oncall"
+        and routed_high == "finance-oncall"
+        and routed_critical == "finance-oncall"
+        and "JARVIS_EDIT" in first_trace
+        and str(multi_path) in follow_text
+        and "finance-oncall" in follow_text
+        and ("evidence" in follow_text.lower() or "prior turn" in follow_text.lower()),
+        (
+            f"FIRST:\n{first.get('text') or ''}\n\n"
+            f"FIRST_TRACE_HAS_MARKER:{'JARVIS_EDIT' in first_trace}\n"
+            f"ROUTES:{routed_low},{routed_high},{routed_critical}\n\n"
+            f"FOLLOW_UP:\n{follow_text}"
+        ),
+    ))
+
     report = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": all(c["ok"] for c in cases), "cases": cases}
     _write_report(report)
     return report
