@@ -564,17 +564,23 @@ land(){
 # Privileged — run as root (interactive first-run), NOT from the dashboard (it stops the loop/dash).
 install_service(){
   [ "$(id -u)" -eq 0 ] || die "install-service must run as root (sudo ./install.sh install-service)"
-  local U=jarvis DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" MODE="${JARVIS_SUDO:-yolo}"
+  # Run as the OWNER (the human who installed it), NOT a locked-down 'jarvis' user — so the service
+  # inherits their AI-CLI binaries (~/.local/bin) AND their CLI login/auth (~/.claude, ~/.codex).
+  # A separate user can read neither (auth files are 0600, owner-only), so the brain never connects.
+  local U="${JARVIS_USER:-${SUDO_USER:-$(logname 2>/dev/null)}}"
+  local DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" MODE="${JARVIS_SUDO:-yolo}"
+  { [ -n "$U" ] && id "$U" >/dev/null 2>&1; } || die "couldn't determine the owner user — re-run as: sudo JARVIS_USER=<you> ./install.sh install-service"
   command -v systemctl >/dev/null 2>&1 || die "no systemd (systemctl) on this host"
+  local UHOME; UHOME="$(getent passwd "$U" | cut -d: -f6)"; UHOME="${UHOME:-/home/$U}"
+  local SVC_PATH="$UHOME/.local/bin:$UHOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
   log "install-service: user=$U dir=$DIR sudo=$MODE"
-  id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$DIR" --shell /usr/sbin/nologin "$U"
   # 1) sudoers FIRST + validated, before disrupting anything. sudoers forbids wildcards in command
   # ARGS, so scoped = the whole apt-get/systemctl binaries (still far better than full root);
   # yolo opt-in = full root. (Hardened single-helper-script scoping is a future improvement.)
   if [ "$MODE" = yolo ]; then
-    echo "jarvis ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jarvis
+    echo "$U ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jarvis
   else
-    printf '%s\n' 'jarvis ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl' > /etc/sudoers.d/jarvis
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl\n' "$U" > /etc/sudoers.d/jarvis
   fi
   chmod 0440 /etc/sudoers.d/jarvis
   visudo -cf /etc/sudoers.d/jarvis >/dev/null || { rm -f /etc/sudoers.d/jarvis; die "generated sudoers invalid"; }
@@ -582,10 +588,10 @@ install_service(){
   # token the URL below prints. Otherwise the service starts, finds no token, generates its own,
   # and the login link we printed is rejected (the early-beta "new url token won't log in" bug).
   dash_token >/dev/null 2>&1 || true
-  # 2) relocate to a jarvis-owned dir (no killing yet)
+  # 2) relocate to the install dir, owned by the owner user
   mkdir -p "$DIR"
   [ "$ROOT" != "$DIR" ] && { cp -a "$ROOT"/. "$DIR"/ && rm -rf "$DIR/.git"; }
-  chown -R "$U":"$U" "$DIR"
+  chown -R "$U" "$DIR"
   # 3) systemd units
   cat > /etc/systemd/system/jarvis-loop.service <<EOF
 [Unit]
@@ -594,6 +600,7 @@ After=network-online.target
 [Service]
 Type=simple
 User=$U
+Environment=PATH=$SVC_PATH
 WorkingDirectory=$DIR
 ExecStart=$DIR/install.sh run
 Restart=always
@@ -608,6 +615,7 @@ After=network-online.target
 [Service]
 Type=simple
 User=$U
+Environment=PATH=$SVC_PATH
 WorkingDirectory=$DIR
 ExecStart=$DIR/install.sh dashboard --host 0.0.0.0 --port ${PORT}
 Restart=always
