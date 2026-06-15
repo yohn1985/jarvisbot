@@ -567,6 +567,10 @@ install_service(){
   fi
   chmod 0440 /etc/sudoers.d/jarvis
   visudo -cf /etc/sudoers.d/jarvis >/dev/null || { rm -f /etc/sudoers.d/jarvis; die "generated sudoers invalid"; }
+  # generate the dashboard access token BEFORE relocating, so /opt/jarvis ends up with the SAME
+  # token the URL below prints. Otherwise the service starts, finds no token, generates its own,
+  # and the login link we printed is rejected (the early-beta "new url token won't log in" bug).
+  dash_token >/dev/null 2>&1 || true
   # 2) relocate to a jarvis-owned dir (no killing yet)
   mkdir -p "$DIR"
   [ "$ROOT" != "$DIR" ] && { cp -a "$ROOT"/. "$DIR"/ && rm -rf "$DIR/.git"; }
