@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIVE_DIR="${JARVIS_LIVE_DIR:-/opt/jarvis}"
 LOCK_FILE="${JARVIS_DEPLOY_LOCK:-/tmp/jarvis-deploy.lock}"
 SERVICES=(jarvis-dashboard.service jarvis-loop.service)
+UNIT_DIR="$ROOT/deploy"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -64,6 +65,12 @@ for file in install.sh requirements.txt README.md LICENSE .env.example config.ex
 done
 run chmod +x "$LIVE_DIR/install.sh"
 
+for unit in "${SERVICES[@]}"; do
+  [ -f "$UNIT_DIR/$unit" ] || fail "missing systemd unit template: $UNIT_DIR/$unit"
+  run sudo -n install -m 0644 "$UNIT_DIR/$unit" "/etc/systemd/system/$unit"
+done
+run sudo -n systemctl daemon-reload
+
 commit="$(git -C "$ROOT" rev-parse HEAD)"
 short_commit="$(git -C "$ROOT" rev-parse --short HEAD)"
 deployed_at="$(date -Is)"
@@ -82,7 +89,13 @@ cat >"$LIVE_DIR/.deployed-version.json" <<JSON
 }
 JSON
 
-run sudo -n systemctl restart "${SERVICES[@]}"
+for service in "${SERVICES[@]}"; do
+  if ! sudo -n timeout 45 systemctl restart "$service"; then
+    echo "WARN: graceful restart timed out for $service; killing service cgroup and retrying" >&2
+    run sudo -n systemctl kill -s KILL "$service"
+    run sudo -n systemctl restart "$service"
+  fi
+done
 for service in "${SERVICES[@]}"; do
   run systemctl is-active --quiet "$service"
 done

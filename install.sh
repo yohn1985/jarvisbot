@@ -277,16 +277,20 @@ EOF
 # Drop task files here for the 'folder' worksource adapter.
 EOF
 
-  gen deploy/jarvis.service <<EOF
+  gen deploy/jarvis-loop.service <<EOF
 [Unit]
 Description=Jarvis wake loop
 After=network-online.target
 [Service]
 Type=simple
-WorkingDirectory=$ROOT
-ExecStart=$ROOT/install.sh run
+User=$USER
+Environment=PATH=/home/$USER/.local/bin:/home/$USER/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+WorkingDirectory=/opt/jarvis
+ExecStart=/opt/jarvis/install.sh run
 Restart=always
 RestartSec=10
+TimeoutStopSec=30
+SendSIGKILL=yes
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -296,9 +300,14 @@ Description=Jarvis dashboard
 After=network-online.target
 [Service]
 Type=simple
-WorkingDirectory=$ROOT
-ExecStart=$ROOT/install.sh dashboard --host 0.0.0.0 --port 8787
+User=$USER
+Environment=PATH=/home/$USER/.local/bin:/home/$USER/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+WorkingDirectory=/opt/jarvis
+ExecStart=/opt/jarvis/install.sh dashboard --host 0.0.0.0 --port 8787
 Restart=always
+RestartSec=5
+TimeoutStopSec=30
+SendSIGKILL=yes
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -605,6 +614,8 @@ WorkingDirectory=$DIR
 ExecStart=$DIR/install.sh run
 Restart=always
 RestartSec=10
+TimeoutStopSec=30
+SendSIGKILL=yes
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -620,6 +631,8 @@ WorkingDirectory=$DIR
 ExecStart=$DIR/install.sh dashboard --host 0.0.0.0 --port ${PORT}
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
+SendSIGKILL=yes
 [Install]
 WantedBy=multi-user.target
 EOF

@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis dashboard
+After=network-online.target
+[Service]
+Type=simple
+User=yohn
+Environment=PATH=/home/yohn/.local/bin:/home/yohn/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+WorkingDirectory=/opt/jarvis
+ExecStart=/opt/jarvis/install.sh dashboard --host 0.0.0.0 --port 8787
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+SendSIGKILL=yes
+[Install]
+WantedBy=multi-user.target
