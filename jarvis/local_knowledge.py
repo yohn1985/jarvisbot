@@ -87,7 +87,7 @@ def remember_root(path: str | Path, source: str = "owner") -> bool:
 def remember_roots_from_text(text: str, cfg: dict | None = None) -> list[str]:
     """Persist explicit absolute paths the owner tells Jarvis to remember."""
     found: list[str] = []
-    for raw in re.findall(r"(/(?:[A-Za-z0-9._ -]+/)*[A-Za-z0-9._ -]+/?)(?=\\s|$)", text or ""):
+    for raw in re.findall(r"(/[A-Za-z0-9._~+@%=-][A-Za-z0-9._~+@%=/:-]*)(?=\s|$)", text or ""):
         cleaned = raw.strip().rstrip(".,;:")
         p = Path(cleaned)
         name = p.name.lower()
