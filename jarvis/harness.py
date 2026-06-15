@@ -148,16 +148,16 @@ def fast_local_answer(latest: str, local_docs: str) -> str:
         "what do you know", "do you know", "are you aware", "what is", "what's",
         "where is", "where's", "where are", "where do"
     ))
+    if asks_memory and "Learned memories relevant to this question:" in text:
+        mem = re.search(r"MEMORY:\s*(.+?)(?:\nSCOPE:|\Z)", text, re.S)
+        if mem:
+            return mem.group(1).strip()
     if asks_memory and "Learning gaps relevant to this question:" in text:
         gap = re.search(r"GAP:\s*(.+?)(?:\nSTATUS:|\Z)", text, re.S)
         reason = re.search(r"REASON:\s*(.+?)(?:\nRECORDED:|\Z)", text, re.S)
         q = (gap.group(1).strip() if gap else latest.strip())
         r = (reason.group(1).strip() if reason else "needs investigation")
         return f"Known unresolved gap: {q}\n\nWhat I still need: {r}"
-    if asks_memory and "Learned memories relevant to this question:" in text:
-        mem = re.search(r"MEMORY:\s*(.+?)(?:\nSCOPE:|\Z)", text, re.S)
-        if mem:
-            return mem.group(1).strip()
     return ""
 
 
