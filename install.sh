@@ -33,7 +33,7 @@ seed(){ local p="$ROOT/$1"; [ -e "$p" ] && { log "kept  $1 (exists)"; return; };
 scaffold(){
   log "materializing Jarvis skeleton under $ROOT"
 
-  gen README.md <<'EOF'
+  seed README.md <<'EOF'
 # Jarvis
 
 A standalone, self-improving agent runtime: it wakes on a loop, perceives its
@@ -85,7 +85,7 @@ never executes); young Jarvis works on itself + learns before the production bac
 MIT licensed. Home: jarvisbot.app
 EOF
 
-  gen LICENSE <<'EOF'
+  seed LICENSE <<'EOF'
 MIT License
 
 Copyright (c) 2026 Jarvis contributors
@@ -129,7 +129,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 EOF
 
-  gen config.example.yaml <<'EOF'
+  seed config.example.yaml <<'EOF'
 # Jarvis config — NON-secret, environment-specific. Copy to config.yaml and edit.
 identity:
   name: Jarvis
