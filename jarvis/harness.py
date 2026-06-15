@@ -226,6 +226,10 @@ def reflect_and_learn(llm, cfg: dict, owner_text: str, answer_text: str,
     prompt = (
         "You are Jarvis's memory reflection step. Decide whether this turn produced a durable memory.\n"
         "Only learn from owner corrections/instructions, local docs, or tool evidence. Do not memorize model guesses.\n"
+        "Important: learn even when the owner did NOT say remember, if Jarvis discovered a durable fact it previously lacked.\n"
+        "Durable facts include documentation roots, repo paths, service names, runbook locations, project rules, tool commands that are the canonical way to inspect something, and stable system architecture.\n"
+        "Do NOT memorize volatile facts such as current queue counts, uptime, load averages, transient status, temporary failures, timestamps, or one-off command output unless the owner explicitly asks you to remember them.\n"
+        "If Jarvis failed to answer because evidence/tools/context were missing, create learning debt.\n"
         "If there is nothing durable, reply exactly NO_MEMORY.\n"
         "If there is a durable learned fact, reply as JSON only:\n"
         '{"learn":true,"fact":"...","scope":"global|project|host|conversation","keywords":["..."],"source":"owner|tool|docs"}\n'

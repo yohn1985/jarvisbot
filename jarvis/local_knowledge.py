@@ -294,6 +294,20 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
     fact = (fact or "").strip()
     if len(fact) < 8:
         return False
+    wanted = _terms(fact)
+    try:
+        if LEARNED.exists():
+            for line in LEARNED.read_text(encoding="utf-8").splitlines()[-200:]:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                existing = _terms(str(row.get("fact") or ""))
+                if fact.lower() == str(row.get("fact") or "").lower():
+                    return False
+                if wanted and existing and len(wanted & existing) >= max(3, min(len(wanted), len(existing)) // 2):
+                    return False
+    except Exception:
+        pass
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
     LEARNED_DIR.mkdir(parents=True, exist_ok=True)
     row = {
