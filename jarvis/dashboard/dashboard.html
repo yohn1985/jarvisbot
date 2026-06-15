@@ -392,6 +392,21 @@ function worklogFromThinking(thinking){
   const show=steps.slice(-8);
   return '<div class="worklog">'+show.map((s,i)=>`<div class="workstep"><span class="thdot${i===show.length-1?' pulse':''}"></span><span>${esc(s)}</span></div>`).join('')+'</div>';
 }
+function visibleThinking(thinking){
+  const out=[];
+  for(const raw of (thinking||'').split('\n')){
+    const line=raw.trimEnd();
+    const t=line.trim();
+    if(!t) continue;
+    if(t.startsWith('Harness:')) continue;
+    if(t.startsWith('JARVIS_EDIT ')) continue;
+    if(t.startsWith('SOURCE:')||t.startsWith('TITLE:')||t.startsWith('CODE:')||t.startsWith('MATCHING_SYMBOLS:')) continue;
+    if(t.startsWith('PROBE:')||t.startsWith('MEMORY:')||t.startsWith('GAP:')||t.startsWith('STATUS:')||t.startsWith('REASON:')||t.startsWith('LEARNED:')) continue;
+    if(t.startsWith('$ ')) continue;
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
 function editCardsFromThinking(thinking){
   const cards=[];
   for(const raw of (thinking||'').split('\n')){
@@ -640,8 +655,9 @@ function renderBody(m){
     const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
     const activity=m.streaming?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Thinking...')}</span></div>`:'';
     const edits=!m.streaming?editCardsFromThinking(thinking):'';
+    const shownThought=visibleThinking(thinking);
     const visible=(bodyText||'').trim();
-    body=activity+edits+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
+    body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
          (m.streaming?'<span class="cursor">▌</span>':'');
   } else {
     const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');

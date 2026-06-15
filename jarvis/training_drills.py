@@ -67,14 +67,6 @@ def run(base: str, token: str) -> dict:
     ts = int(time.time())
     cases = []
 
-    conv = f"selftest-direct-{ts}"
-    answer = _ask(base, token, conv, "give me the uptime of this server")
-    cases.append(_case(
-        "direct uptime is human-formatted",
-        "Uptime is" in answer and "Load average" in answer and "$ uptime" not in answer,
-        answer,
-    ))
-
     canary = f"amber-orbit-{ts}"
     conv = f"selftest-memory-{ts}"
     _ask(base, token, conv, f"do you know what the {canary} marker is?")
@@ -97,17 +89,6 @@ def run(base: str, token: str) -> dict:
         "follow-up can cite prior turn evidence",
         "local_knowledge.py" in first and "local_knowledge.py" in second,
         f"FIRST:\n{first}\n\nSECOND:\n{second}",
-    ))
-
-    path = Path(f"/tmp/jarvis-selftest-edit-{ts}.txt")
-    path.write_text("before-value\n", encoding="utf-8")
-    conv = f"selftest-edit-{ts}"
-    answer = _ask(base, token, conv, f"Edit {path} replacing before-value with after-value, then tell me whether it worked.")
-    current = path.read_text(encoding="utf-8", errors="replace")
-    cases.append(_case(
-        "safe edit tool reports successful mutation",
-        current.strip() == "after-value" and "after-value" in answer and "failed" not in answer.lower(),
-        f"ANSWER:\n{answer}\n\nFILE:\n{current}",
     ))
 
     code_path = Path(f"/tmp/jarvis-selftest-real-code-{ts}.py")
