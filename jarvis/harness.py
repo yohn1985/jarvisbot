@@ -288,6 +288,9 @@ def planned_tool_calls(latest: str) -> list[dict]:
     Models are still free to ask for more tools after this, but common status questions should
     start from reality instead of model-invented checklists.
     """
+    edit_plan = _planned_edit_calls(latest)
+    if edit_plan:
+        return edit_plan
     low = (latest or "").lower()
     if not any(w in low for w in ("status", "doing", "stuck", "running", "health", "pipeline", "worker", "service", "timer")):
         return []
@@ -301,6 +304,35 @@ def planned_tool_calls(latest: str) -> list[dict]:
             {"tool": "shell", "args": {"cmd": "ps -eo pid,etime,cmd --sort=etime | grep -Ei 'jarvis|agent|worker|pipeline|deploy|review|finder|fixer' | grep -v grep | tail -80 || true"}},
         ])
     return calls[:4]
+
+
+def _planned_edit_calls(text: str) -> list[dict]:
+    raw = (text or "").strip()
+    if not re.search(r"\b(edit|replace|change|update)\b", raw, re.I):
+        return []
+    patterns = [
+        r"\b(?:edit|change|update)\s+(?P<path>/\S+)\s+replacing\s+(?P<old>.+?)\s+with\s+(?P<new>.+?)(?:,\s*then\b|\.?$|$)",
+        r"\breplace\s+(?P<old>.+?)\s+with\s+(?P<new>.+?)\s+in\s+(?P<path>/\S+)(?:,\s*then\b|\.?$|$)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, raw, re.I)
+        if not m:
+            continue
+        path = _strip_token(m.group("path"))
+        old = _strip_token(m.group("old"))
+        new = _strip_token(m.group("new"))
+        if path and old and new:
+            return [
+                {"tool": "read", "args": {"path": path}},
+                {"tool": "edit", "args": {"path": path, "old": old, "new": new}},
+                {"tool": "read", "args": {"path": path}},
+            ]
+    return []
+
+
+def _strip_token(value: str) -> str:
+    value = (value or "").strip().strip("`'\"")
+    return re.sub(r"\s*(?:,?\s*then\s+.*)?$", "", value, flags=re.I).strip().strip("`'\"")
 
 
 def tool_status(call: dict) -> str:
