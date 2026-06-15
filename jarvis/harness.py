@@ -116,6 +116,7 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         + "- Use available tools when local evidence is needed.\n"
         + f"- Current tool mode: {chat_tools.mode_description()}.\n"
         + "- Do not claim you ran, scanned, read, indexed, remembered, deployed, or checked anything unless evidence in this prompt proves it.\n"
+        + "- Keep negative findings scoped to the evidence: say 'I found no matching X in Y' instead of 'there is no X' unless the evidence proves the universal claim.\n"
         + "- If evidence is missing, say what is missing and record the gap during reflection.\n"
         + "- If relevant learning gaps are included, say this is a known unresolved gap and name the next evidence needed. Do not answer as if the gap was never recorded.\n"
         + f"\nConversation so far:\n{transcript}\n"

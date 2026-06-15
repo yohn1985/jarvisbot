@@ -756,7 +756,9 @@ def _chat_reply(conv):
                   + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
                   "that fully conveys the essence — no preamble, filler, restating the question, or "
                   "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
-                  "process narration. Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
+                  "process narration. State uncertainty and scoped negative evidence precisely: if you only checked "
+                  "specific commands, files, endpoints, or directories, say that instead of making a universal claim. "
+                  "Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
                   f"code in code blocks.\n\n{name}:")
         try:
             full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
