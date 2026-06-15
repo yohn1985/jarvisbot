@@ -151,6 +151,10 @@ def fast_local_answer(latest: str, local_docs: str) -> str:
         q = (gap.group(1).strip() if gap else latest.strip())
         r = (reason.group(1).strip() if reason else "needs investigation")
         return f"Known unresolved gap: {q}\n\nWhat I still need: {r}"
+    if asks_memory and "Learned memories relevant to this question:" in text:
+        mem = re.search(r"MEMORY:\s*(.+?)(?:\nSCOPE:|\Z)", text, re.S)
+        if mem:
+            return mem.group(1).strip()
     return ""
 
 
