@@ -740,6 +740,8 @@ def _chat_reply(conv):
                 web_ctx = ""
         tool_ctx = harness.collect_tool_evidence(llm, base, last, status=status_note)
         if tool_ctx:
+            buf["th"] += "\nHarness: tool evidence gathered for follow-up questions\n" + tool_ctx[:6000] + "\n"
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
             status_note("summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.

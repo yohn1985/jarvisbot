@@ -96,7 +96,7 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
     local_docs = local_knowledge.retrieve(latest, cfg)
     project_hints = _read_project_hints(cfg)
     transcript = "\n".join(
-        ("Owner: " if m.get("from") == "owner" else "Jarvis: ") + (m.get("text") or "")
+        _transcript_turn(m)
         for m in messages
         if m.get("kind") in ("message", "note", "answer", "question")
     )
@@ -128,6 +128,39 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         "project_hints": project_hints,
         "context_sources": context_sources(cfg),
     }
+
+
+def _transcript_turn(m: dict) -> str:
+    text = (m.get("text") or "").strip()
+    if m.get("from") == "owner":
+        return "Owner: " + text
+    out = "Jarvis: " + text
+    evidence = _compact_prior_thinking(m.get("thinking") or "")
+    if evidence:
+        out += "\nJarvis prior evidence/status:\n" + evidence
+    return out
+
+
+def _compact_prior_thinking(thinking: str, limit: int = 2200) -> str:
+    """Carry forward prior-turn operating evidence without dumping every thought token."""
+    if not thinking:
+        return ""
+    lines = []
+    capture = False
+    for raw in thinking.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("Harness:"):
+            lines.append(line)
+            capture = line.startswith("Harness: tool evidence")
+            continue
+        if line.startswith("$ ") or line.startswith("/") or line.startswith("CODE:") or line.startswith("SOURCE:"):
+            lines.append(line)
+            continue
+        if capture:
+            lines.append(line[:500])
+    return "\n".join(lines)[-limit:]
 
 
 def likely_needs_tools(text: str) -> bool:
