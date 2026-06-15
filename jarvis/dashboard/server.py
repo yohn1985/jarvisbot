@@ -332,6 +332,7 @@ def _discovery():
     items = []   # (path, primary)
     for d, primary in (
         (ROOT / "workspace" / "discovery", True),
+        (ROOT / "workspace" / "knowledge" / "indexes", True),
         (ROOT / "workspace" / "knowledge" / "learned", True),
         (ROOT / "workspace" / "knowledge" / "learning-gaps", True),
         (ROOT / "workspace" / "knowledge", False),
@@ -355,6 +356,8 @@ def _discovery():
                 label = "memory/" + label
             elif p.parent.name == "learning-gaps":
                 label = "gap/" + label
+            elif p.parent.name == "indexes":
+                label = "index/" + label
             out.append({"name": label, "content": p.read_text(), "primary": primary or p.name == "INDEX.md"})
         except Exception:
             pass
@@ -1097,6 +1100,13 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_approve(ids)))
         if u.path == "/api/skill-install":
             return self._send(200, json.dumps(_install_skill((body.get("name") or "").strip())))
+        if u.path == "/api/reindex":
+            try:
+                from jarvis.config import load
+                from jarvis import local_knowledge
+                return self._send(200, json.dumps(local_knowledge.refresh_all_indexes(load(), force=True)))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}))
         if u.path == "/api/set-main":
             target = _MAIN_TARGET.get((body.get("provider") or "").strip())
             if not target:
