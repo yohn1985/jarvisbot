@@ -285,11 +285,22 @@ def refresh_index(cfg: dict | None = None, force: bool = False) -> dict:
         return existing
     items: list[dict] = []
     seen: set[str] = set()
+    old_by_path = {str(item.get("path")): item for item in existing.get("files", []) if isinstance(item, dict)}
     for root in roots(cfg):
         for path in _iter_doc_files(root):
             if str(path) in seen:
                 continue
             seen.add(str(path))
+            try:
+                st = path.stat()
+                old = old_by_path.get(str(path))
+                if old and int(old.get("mtime", -1)) == int(st.st_mtime) and int(old.get("size", -1)) == int(st.st_size):
+                    items.append(old)
+                    if len(items) >= MAX_FILES:
+                        break
+                    continue
+            except Exception:
+                pass
             text = _read_doc(path)
             if not text:
                 continue
@@ -384,12 +395,23 @@ def refresh_code_index(cfg: dict | None = None, force: bool = False) -> dict:
         return existing
     items: list[dict] = []
     seen: set[str] = set()
+    old_by_path = {str(item.get("path")): item for item in existing.get("files", []) if isinstance(item, dict)}
     for root in workspace_roots(cfg):
         for path in _iter_code_files(root):
             sp = str(path)
             if sp in seen:
                 continue
             seen.add(sp)
+            try:
+                st = path.stat()
+                old = old_by_path.get(sp)
+                if old and int(old.get("mtime", -1)) == int(st.st_mtime) and int(old.get("size", -1)) == int(st.st_size):
+                    items.append(old)
+                    if len(items) >= MAX_CODE_FILES:
+                        break
+                    continue
+            except Exception:
+                pass
             text = _read_doc(path)
             if not text:
                 continue

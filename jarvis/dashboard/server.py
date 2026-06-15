@@ -1244,9 +1244,30 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--host", default="127.0.0.1")
     a = ap.parse_args()
+    _start_background_indexer()
     srv = ThreadingHTTPServer((a.host, a.port), H)
     print(f"[jarvis-dashboard] http://{a.host}:{a.port}")
     srv.serve_forever()
+
+
+def _start_background_indexer():
+    """Keep local docs/code/ops indexes warm without requiring a host-specific timer."""
+    interval = int(os.environ.get("JARVIS_INDEX_INTERVAL_SECONDS", "300") or "300")
+    if interval <= 0:
+        return
+
+    def _loop():
+        time.sleep(20)
+        while True:
+            try:
+                from jarvis.config import load
+                from jarvis import local_knowledge
+                local_knowledge.refresh_all_indexes(load(), force=False)
+            except Exception:
+                pass
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
