@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -143,6 +144,79 @@ def run(base: str, token: str) -> dict:
         ),
     ))
 
+    create_path = Path(f"/tmp/jarvis-selftest-created-module-{ts}.py")
+    if create_path.exists():
+        create_path.unlink()
+    conv = f"selftest-natural-create-{ts}"
+    msg = _ask_message(
+        base,
+        token,
+        conv,
+        (
+            f"Create a new Python module at {create_path} for incident routing. "
+            "Use normal coding-agent behavior, not an exact replacement drill. "
+            "The file must be at least 120 lines and include a Task dataclass plus "
+            "functions named normalize_severity, route_incident, and summarize_queue. "
+            "After writing it, tell me the file path and one behavior it implements."
+        ),
+        timeout=240,
+    )
+    created = create_path.read_text(encoding="utf-8", errors="replace") if create_path.exists() else ""
+    created_lines = created.splitlines()
+    create_text = msg.get("text") or ""
+    cases.append(_case(
+        "natural-language create-file task writes a real 120+ line module",
+        create_path.exists()
+        and len(created_lines) >= 120
+        and "dataclass" in created
+        and "def normalize_severity" in created
+        and "def route_incident" in created
+        and "def summarize_queue" in created
+        and str(create_path) in create_text,
+        (
+            f"ANSWER:\n{create_text}\n\n"
+            f"EXISTS:{create_path.exists()}\n"
+            f"LINES:{len(created_lines)}\n"
+            f"SNIP:\n{created[:1200]}"
+        ),
+    ))
+
+    route_path = Path(f"/tmp/jarvis-selftest-route-module-{ts}.py")
+    route_path.write_text(_sample_incident_module(), encoding="utf-8")
+    conv = f"selftest-natural-edit-{ts}"
+    msg = _ask_message(
+        base,
+        token,
+        conv,
+        (
+            f"Modify the existing Python file {route_path}. Change only the route_incident "
+            "function so billing incidents with high or critical severity return "
+            "finance-oncall before the normal product routing. Do not ask me for exact old "
+            "and new text. After editing, tell me what changed."
+        ),
+        timeout=240,
+    )
+    routed_low, routed_high, routed_critical = _load_route_values(route_path)
+    edited = route_path.read_text(encoding="utf-8", errors="replace")
+    edit_text = msg.get("text") or ""
+    edit_thinking = msg.get("thinking") or ""
+    cases.append(_case(
+        "natural-language named-function edit changes behavior and emits edit marker",
+        routed_low == "product-oncall"
+        and routed_high == "finance-oncall"
+        and routed_critical == "finance-oncall"
+        and "JARVIS_EDIT" in edit_thinking
+        and "route_incident" in edit_text,
+        (
+            f"ANSWER:\n{edit_text}\n\n"
+            f"THINKING_HAS_MARKER:{'JARVIS_EDIT' in edit_thinking}\n"
+            f"BILLING_LOW:{routed_low}\n"
+            f"BILLING_HIGH:{routed_high}\n"
+            f"BILLING_CRITICAL:{routed_critical}\n\n"
+            f"SNIP:\n{edited[edited.find('def route_incident'):edited.find('def route_incident') + 900]}"
+        ),
+    ))
+
     report = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": all(c["ok"] for c in cases), "cases": cases}
     _write_report(report)
     return report
@@ -202,10 +276,88 @@ def _load_priority_values(path: Path) -> tuple[float, float]:
     if not spec or not spec.loader:
         return 0.0, 0.0
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return (
         float(module.calculate_priority(10.0, 47.0)),
         float(module.calculate_priority(10.0, 49.0)),
+    )
+
+
+def _sample_incident_module() -> str:
+    lines = [
+        '"""Sample incident routing module for natural-language edit drills."""',
+        "",
+        "from __future__ import annotations",
+        "",
+        "from dataclasses import dataclass",
+        "",
+        "@dataclass",
+        "class Incident:",
+        "    kind: str",
+        "    severity: str",
+        "    title: str = ''",
+        "",
+        "SEVERITY_ORDER = {",
+        "    'low': 1,",
+        "    'medium': 2,",
+        "    'high': 3,",
+        "    'critical': 4,",
+        "}",
+        "",
+        "def normalize_severity(value: str) -> str:",
+        "    cleaned = (value or '').strip().lower()",
+        "    if cleaned in {'sev1', 'p0', 'urgent'}:",
+        "        return 'critical'",
+        "    if cleaned in {'sev2', 'p1'}:",
+        "        return 'high'",
+        "    if cleaned in {'sev3', 'p2'}:",
+        "        return 'medium'",
+        "    if cleaned in SEVERITY_ORDER:",
+        "        return cleaned",
+        "    return 'low'",
+        "",
+        "def route_incident(kind: str, severity: str) -> str:",
+        "    normalized_kind = (kind or '').strip().lower()",
+        "    normalized_severity = normalize_severity(severity)",
+        "    if normalized_kind in {'security', 'abuse'}:",
+        "        return 'security-oncall'",
+        "    if normalized_severity == 'critical':",
+        "        return 'incident-commander'",
+        "    if normalized_kind in {'billing', 'payments', 'subscription'}:",
+        "        return 'product-oncall'",
+        "    if normalized_kind in {'infrastructure', 'database', 'network'}:",
+        "        return 'platform-oncall'",
+        "    return 'support-triage'",
+        "",
+        "def summarize_queue(incidents: list[Incident]) -> dict[str, int]:",
+        "    summary: dict[str, int] = {}",
+        "    for incident in incidents:",
+        "        route = route_incident(incident.kind, incident.severity)",
+        "        summary[route] = summary.get(route, 0) + 1",
+        "    return summary",
+        "",
+    ]
+    for idx in range(1, 95):
+        lines.extend([
+            f"def policy_note_{idx}() -> str:",
+            f"    return 'policy-{idx}'",
+            "",
+        ])
+    return "\n".join(lines)
+
+
+def _load_route_values(path: Path) -> tuple[str, str, str]:
+    spec = importlib.util.spec_from_file_location(f"jarvis_route_{path.stem}", path)
+    if not spec or not spec.loader:
+        return "", "", ""
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return (
+        str(module.route_incident("billing", "low")),
+        str(module.route_incident("billing", "high")),
+        str(module.route_incident("billing", "critical")),
     )
 
 

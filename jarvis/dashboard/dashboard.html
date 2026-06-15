@@ -117,6 +117,7 @@
   .thbody{ margin:6px 0 0 4px; padding-left:10px; border-left:2px solid var(--line); max-height:280px; overflow-y:auto; }
   .thbody pre{ margin:0; color:var(--dim); font-style:italic; font-size:12px; white-space:pre-wrap; }
   .thinking-live{ display:inline-flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; }
+  .activityline{ display:inline-flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; margin:0 0 7px; }
   .worklog{ display:flex; flex-direction:column; gap:3px; margin:0 0 9px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.025); color:var(--dim); font-size:12px; max-width:760px; }
   .workstep{ display:flex; align-items:flex-start; gap:8px; }
   .workstep .thdot{ margin-top:5px; flex:0 0 auto; }
@@ -392,8 +393,11 @@ function worklogFromThinking(thinking){
   return '<div class="worklog">'+show.map((s,i)=>`<div class="workstep"><span class="thdot${i===show.length-1?' pulse':''}"></span><span>${esc(s)}</span></div>`).join('')+'</div>';
 }
 function editCardsFromThinking(thinking){
-  const cards=[]; const re=/JARVIS_EDIT (\{.*\})/g; let m;
-  while((m=re.exec(thinking||''))){ try{ cards.push(JSON.parse(m[1])); }catch(e){} }
+  const cards=[];
+  for(const raw of (thinking||'').split('\n')){
+    const m=raw.match(/^\s*JARVIS_EDIT\s+(\{.*\})\s*$/);
+    if(m){ try{ cards.push(JSON.parse(m[1])); }catch(e){} }
+  }
   return cards.map((c,i)=>editCardHTML(c,i,true)).join('');
 }
 function editCardHTML(c,i,collapsed){
@@ -634,7 +638,10 @@ function renderBody(m){
   if(isJ && !isQ){
     const sp=splitThinking(m.text); const hasField=m.thinking&&m.thinking.trim();
     const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
-    body=(!m.streaming?worklogFromThinking(thinking)+editCardsFromThinking(thinking):'')+(thinking?thoughtBlock(thinking,m.id,!!m.streaming):'')+'<div class="mdbody">'+md(bodyText)+'</div>'+
+    const activity=m.streaming?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Thinking...')}</span></div>`:'';
+    const edits=!m.streaming?editCardsFromThinking(thinking):'';
+    const visible=(bodyText||'').trim();
+    body=activity+edits+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
          (m.streaming?'<span class="cursor">▌</span>':'');
   } else {
     const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
@@ -743,9 +750,8 @@ function renderLive(){
   const cl=document.getElementById('chatlog'); if(!cl) return;
   let row=cl.querySelector('[data-mid="sse-live"]');
   if(!row){ cl.insertAdjacentHTML('beforeend','<div class="row jrow" data-mid="sse-live"><div class="msg jarvis"></div></div>'); row=cl.querySelector('[data-mid="sse-live"]'); }
-  const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,streaming:true};
-  const statusLine=renderWorklog();
-  row.querySelector('.msg').innerHTML=statusLine+renderBody(m);
+  const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,status:_live.status,streaming:true};
+  row.querySelector('.msg').innerHTML=renderBody(m);
   const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
   if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
 }
