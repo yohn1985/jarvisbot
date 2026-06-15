@@ -368,6 +368,7 @@ function knowledgeGroupName(name){
   if((name||'').startsWith('memory/')) return 'MEMORIES';
   if((name||'').startsWith('gap/')) return 'LEARNING GAPS';
   if((name||'').startsWith('index/')) return 'INDEXES';
+  if((name||'').startsWith('eval/')) return 'SELF-TRAINING';
   if((name||'').startsWith('docs/')) return 'DOCUMENTATION';
   return 'DISCOVERY';
 }
@@ -392,7 +393,7 @@ function renderKnowledge(docs){
   const primary=knowledgeDocs.map((d,i)=>({d,i})).filter(x=>x.d.primary!==false);
   const groups={};
   for(const item of primary){ const g=knowledgeGroupName(item.d.name); (groups[g]||(groups[g]=[])).push(item); }
-  const order=['DISCOVERY','DOCUMENTATION','INDEXES','MEMORIES','LEARNING GAPS'];
+  const order=['DISCOVERY','DOCUMENTATION','INDEXES','SELF-TRAINING','MEMORIES','LEARNING GAPS'];
   let list='<button type="button" class="kreindex" onclick="reindexKnowledge(this)">↻ Reindex knowledge</button>';
   for(const group of order.filter(g=>groups[g]&&groups[g].length)){
     const hasSelected=groups[group].some(x=>x.i===knowledgeSel);

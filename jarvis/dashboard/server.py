@@ -333,6 +333,7 @@ def _discovery():
     for d, primary in (
         (ROOT / "workspace" / "discovery", True),
         (ROOT / "workspace" / "knowledge" / "indexes", True),
+        (ROOT / "workspace" / "knowledge" / "evals", True),
         (ROOT / "workspace" / "knowledge" / "learned", True),
         (ROOT / "workspace" / "knowledge" / "learning-gaps", True),
         (ROOT / "workspace" / "knowledge", False),
@@ -358,6 +359,8 @@ def _discovery():
                 label = "gap/" + label
             elif p.parent.name == "indexes":
                 label = "index/" + label
+            elif p.parent.name == "evals":
+                label = "eval/" + label
             out.append({"name": label, "content": p.read_text(), "primary": primary or p.name == "INDEX.md"})
         except Exception:
             pass
