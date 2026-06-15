@@ -238,7 +238,7 @@ function show(id){
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
-let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0;
+let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0, _defaultSystemPrompt='';
 let _kwSig='', _cfgSig='', _chatSig='', _skSig='', _mdSig='', modelDraft={};
 function renderModels(list){
   const el=document.getElementById('set-models');
@@ -469,6 +469,7 @@ async function load(){
   }
   // config (Settings page)
   const c=(cfg.config)||{}; const idn=c.identity||{};
+  _defaultSystemPrompt = cfg.default_system_prompt || '';
   const md=document.getElementById('mode'); if(md){ md.textContent=idn.mode||'—'; md.className='mode-'+(idn.mode||''); }
   const orch=((c.llm||{}).routing||{}).orchestrator||'';
   const cm=document.getElementById('chip-model'); if(cm) cm.textContent=(orch.split(':')[1]||orch||'brain');
@@ -511,13 +512,19 @@ async function load(){
 
     const prCard=card('PRIORITY LADDER (one per line, top = most important)',
       `<textarea id="cf-pri" rows="${Math.max(4,(c.priorities||[]).length)}" style="width:100%">${esc((c.priorities||[]).join('\n'))}</textarea>`,'savePriorities()');
+    const promptNow=((c.prompts||{}).system)||_defaultSystemPrompt||'';
+    const promptCard=card('OPERATING PROMPT (sent with every message)',
+      '<div class="setdesc">Use {name}, {mode}, and {brain} as optional placeholders. Blank prompt resets to the shipped default.</div>'+
+      `<textarea id="cf-system-prompt" rows="18" style="width:100%;font-family:ui-monospace,monospace">${esc(promptNow)}</textarea>`+
+      '<div style="margin-top:8px"><button type="button" class="ghostbtn" onclick="resetSystemPrompt()">Reset to shipped default</button></div>',
+      'saveSystemPrompt()');
 
     const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
        `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
     // Brain & Models section gets the routing card (below the connect cards); Behavior gets the rest.
     const rEl=document.getElementById('set-routing'); if(rEl) rEl.innerHTML=rtCard;
     const bEl=document.getElementById('set-behavior');
-    if(bEl) bEl.innerHTML = idCard + acCard + prCard
+    if(bEl) bEl.innerHTML = promptCard + idCard + acCard + prCard
       + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
   }
   // procs
@@ -746,6 +753,8 @@ function saveRouting(){ const r={}, params={};
     if(eff) p.effort=eff.value; if(th) p.thinking=th.value; if(Object.keys(p).length) params[role]=p; });
   saveCfg({routing:r,params:params},'msg-saveRouting'); }
 function savePriorities(){ saveCfg({priorities:(_v('cf-pri')||'').split('\n')},'msg-savePriorities'); }
+function saveSystemPrompt(){ saveCfg({prompts:{system:_v('cf-system-prompt')||''}},'msg-saveSystemPrompt'); }
+function resetSystemPrompt(){ const e=document.getElementById('cf-system-prompt'); if(e){ e.value=_defaultSystemPrompt||''; } }
 function autogrow(el){ if(!el)return; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
 function sayKey(e){
   const m=document.getElementById('slashmenu');

@@ -70,10 +70,16 @@ def _config():
         if p.exists():
             try:
                 import yaml
-                return {"source": name, "config": yaml.safe_load(p.read_text())}
+                cfg = yaml.safe_load(p.read_text()) or {}
+                from jarvis import persona
+                return {"source": name, "config": cfg, "default_system_prompt": persona.default_system_prompt(cfg)}
             except Exception:
                 return {"source": name, "raw": p.read_text()}
-    return {"source": None, "config": {}}
+    try:
+        from jarvis import persona
+        return {"source": None, "config": {}, "default_system_prompt": persona.default_system_prompt({})}
+    except Exception:
+        return {"source": None, "config": {}}
 
 
 # --- dynamic model detection per pool (borrowed pattern from the ai-usage dashboard) ---
@@ -228,6 +234,17 @@ def _save_config(patch):
     if isinstance(patch.get("priorities"), list):
         data["priorities"] = [s.strip() for s in patch["priorities"] if str(s).strip()]
         changed.append("priorities")
+    if isinstance(patch.get("prompts"), dict):
+        prompts = data.setdefault("prompts", {})
+        if "system" in patch["prompts"]:
+            text = str(patch["prompts"].get("system") or "").strip()
+            if text:
+                prompts["system"] = text
+            else:
+                prompts.pop("system", None)
+            if not prompts:
+                data.pop("prompts", None)
+            changed.append("prompts.system")
     _write_yaml(p, data)
     return "saved: " + (", ".join(changed) if changed else "nothing")
 
