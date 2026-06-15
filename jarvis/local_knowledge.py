@@ -729,6 +729,7 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
     if len(fact) < 8:
         return False
     wanted = _terms(fact)
+    wanted_ids = _memory_identifiers(fact)
     try:
         if LEARNED.exists():
             for line in LEARNED.read_text(encoding="utf-8").splitlines()[-200:]:
@@ -736,8 +737,11 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
                     continue
                 row = json.loads(line)
                 existing = _terms(str(row.get("fact") or ""))
+                existing_ids = _memory_identifiers(str(row.get("fact") or ""))
                 if fact.lower() == str(row.get("fact") or "").lower():
                     return False
+                if wanted_ids and existing_ids and not (wanted_ids & existing_ids):
+                    continue
                 if wanted and existing and len(wanted & existing) >= max(3, min(len(wanted), len(existing)) // 2):
                     return False
     except Exception:
@@ -774,6 +778,14 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
     path.write_text("\n".join(body).strip() + "\n", encoding="utf-8")
     refresh_index(force=True)
     return True
+
+
+def _memory_identifiers(text: str) -> set[str]:
+    """Identifiers make similar facts distinct: ticket IDs, canaries, hostnames with digits, etc."""
+    low = (text or "").lower()
+    ids = set(re.findall(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b", low))
+    ids.update(re.findall(r"\b[a-z0-9._-]*\d[a-z0-9._-]*\b", low))
+    return {x for x in ids if len(x) >= 4}
 
 
 def queue_learning_question(question: str, reason: str = "missing-local-knowledge") -> bool:
