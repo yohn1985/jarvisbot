@@ -122,11 +122,12 @@ If you need local evidence or need to perform an explicitly requested file chang
 {"tool":"search","args":{"pattern":"pipeline","path":"."}}
 {"tool":"write","args":{"path":"example.md","content":"text"}}
 {"tool":"append","args":{"path":"example.md","content":"text"}}
+{"tool":"edit","args":{"path":"example.md","old":"exact text to replace","new":"replacement text"}}
 
 Rules:
 - Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
 - shell is read-only and blocks destructive or mutating commands.
-- write/append obey the configured mode: shadow blocks writes, assist requires explicit owner edit intent, autonomous allows local-safe writes.
+- write/append/edit obey the configured mode: shadow blocks writes, assist requires explicit owner edit intent, autonomous allows local-safe writes.
 - If no tool is needed, reply exactly: NO_TOOL"""
 
 
@@ -303,6 +304,34 @@ def write_file(path: str, content: str, append: bool = False, owner_text: str = 
         return {"ok": False, "tool": "write", "path": raw, "error": str(e)[:300]}
 
 
+def edit_file(path: str, old: str, new: str, owner_text: str = "", explicit: bool = False) -> dict:
+    raw = _clean_cmd(path)
+    allowed, reason = write_allowed(owner_text, explicit=explicit)
+    if not allowed:
+        return {"ok": False, "tool": "edit", "path": raw, "error": reason}
+    if not old:
+        return {"ok": False, "tool": "edit", "path": raw, "error": "old text is required"}
+    try:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = default_cwd() / p
+        resolved = str(p.resolve())
+        if any(resolved == x.rstrip("/") or resolved.startswith(x) for x in _PROTECTED_WRITE_PREFIXES):
+            return {"ok": False, "tool": "edit", "path": str(p), "error": "protected path; use the repo/deploy path instead"}
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "tool": "edit", "path": str(p), "error": "file not found"}
+        data = p.read_text(errors="replace")
+        count = data.count(old)
+        if count == 0:
+            return {"ok": False, "tool": "edit", "path": str(p), "error": "old text not found"}
+        if count > 1:
+            return {"ok": False, "tool": "edit", "path": str(p), "error": f"old text appears {count} times; provide a more specific edit"}
+        p.write_text(data.replace(old, new, 1))
+        return {"ok": True, "tool": "edit", "path": str(p), "output": "edited file"}
+    except Exception as e:
+        return {"ok": False, "tool": "edit", "path": raw, "error": str(e)[:300]}
+
+
 def _json_candidate(text: str) -> str | None:
     text = (text or "").strip()
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
@@ -335,7 +364,7 @@ def parse_model_tool_call(text: str) -> dict | None:
         return None
     tool = (data.get("tool") or "").strip().lower()
     args = data.get("args") or {}
-    if tool not in {"shell", "read", "search", "write", "append"} or not isinstance(args, dict):
+    if tool not in {"shell", "read", "search", "write", "append", "edit"} or not isinstance(args, dict):
         cmds = extract_shell_commands(text, limit=1)
         if cmds:
             return {"tool": "shell", "args": {"cmd": cmds[0]}}
@@ -360,7 +389,7 @@ def extract_xml_tool_calls(text: str, limit: int = 8) -> list[dict]:
     """
     out: list[dict] = []
     raw_text = text or ""
-    for tag, attrs_raw in re.findall(r"<(read_file|read|search|grep|shell|bash)\b([^>]*)/?>", raw_text, flags=re.I):
+    for tag, attrs_raw in re.findall(r"<(read_file|read|search|grep|shell|bash|edit_file|edit)\b([^>]*)/?>", raw_text, flags=re.I):
         tag_l = tag.lower()
         attrs = _xml_attrs(attrs_raw)
         if tag_l in {"read_file", "read"}:
@@ -376,6 +405,12 @@ def extract_xml_tool_calls(text: str, limit: int = 8) -> list[dict]:
             cmd = attrs.get("cmd") or attrs.get("command")
             if cmd and not shell_safety_error(cmd):
                 out.append({"tool": "shell", "args": {"cmd": cmd}})
+        elif tag_l in {"edit_file", "edit"}:
+            path = attrs.get("path") or attrs.get("file")
+            old = attrs.get("old")
+            new = attrs.get("new")
+            if path and old is not None and new is not None:
+                out.append({"tool": "edit", "args": {"path": path, "old": old, "new": new}})
         if len(out) >= limit:
             break
     return out
@@ -418,6 +453,9 @@ def run_model_tool(call: dict, owner_text: str) -> dict:
     if tool in ("write", "append"):
         return write_file(str(args.get("path") or ""), str(args.get("content") or ""),
                           append=(tool == "append"), owner_text=owner_text)
+    if tool == "edit":
+        return edit_file(str(args.get("path") or ""), str(args.get("old") or ""), str(args.get("new") or ""),
+                         owner_text=owner_text)
     return {"ok": False, "tool": tool or "unknown", "error": "unknown tool"}
 
 
@@ -460,6 +498,10 @@ def format_result(result: dict) -> str:
             return f"{result.get('path')}\n\n{result.get('output')}"
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "write":
+        if result.get("ok"):
+            return f"{result.get('output')}: {result.get('path')}"
+        return f"{result.get('path')}\n(error: {result.get('error')})"
+    if tool == "edit":
         if result.get("ok"):
             return f"{result.get('output')}: {result.get('path')}"
         return f"{result.get('path')}\n(error: {result.get('error')})"
