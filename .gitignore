@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+output/
+*.log
+db/data/
+state/
+config.yaml
+deploy/
+extras/

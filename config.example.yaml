@@ -1,0 +1,87 @@
+# Jarvis config — NON-secret, environment-specific. Copy to config.yaml and edit.
+identity:
+  name: Jarvis
+  owner: you              # your name or handle (used in prompts/messages)
+  mode: shadow            # shadow | assist | autonomous  (start in shadow!)
+
+# What may it DO without asking? Everything else is propose-only.
+action_classes:
+  investigate: allow      # read-only: always safe
+  propose: allow          # write a plan / open a PR (reviewed)
+  fix_pr: ask             # open a fix PR through the red-team gate
+  deploy: deny            # irreversible / customer-facing → earn it
+  infra_mutate: deny      # nginx/dns/firewall → never autonomous yet
+  self_modify: deny       # edit its own code → only via the seatbelt, opt-in deliberately
+
+# LLM = a router over a model catalog (claude / codex / ollama local+cloud).
+llm:
+  think_on_tick: true       # let the tick reason via the LLM (and ask when stuck)
+  routing:                  # role -> "backend:model" (cost/capability tiered)
+    triage:        claude:haiku         # the wake-tick decision can be cheap
+    orchestrator:  claude:opus          # deep judgment — frontier only
+    red_team:      claude:opus          # self-audit must be sharp
+    fixer:         codex:gpt-5.5        # code edits
+    researcher:    claude:sonnet        # high-volume leaf work
+    summarizer:    claude:haiku         # log/area summarization — cheapest
+  fallbacks: [claude:opus]              # used when the routed backend is absent/fails
+  aliases:                  # short name -> real model id
+    opus: claude-opus-4-8
+    sonnet: claude-sonnet-4-6
+    haiku: claude-haiku-4-5
+  # A backend is EITHER a CLI template (list) OR an HTTP endpoint (dict). Both are supported.
+  backends:
+    # CLI templates ({model},{prompt}; no {prompt} => prompt is piped on stdin):
+    claude: ["claude","-p","--model","{model}"]
+    codex:  ["codex","exec","--model","{model}","{prompt}"]
+    # ollama (local): ["ollama","run","{model}","{prompt}"]
+    # HTTP backends (OpenAI-compatible by default; format: anthropic for the Anthropic Messages API).
+    # The key is read from the named env var (.env). Examples:
+    # ollama_cloud: {http: "https://ollama.com/v1/chat/completions", api_key_env: OLLAMA_API_KEY}
+    # openai:       {http: "https://api.openai.com/v1/chat/completions", api_key_env: OPENAI_API_KEY}
+    # anthropic:    {http: "https://api.anthropic.com/v1/messages", api_key_env: ANTHROPIC_API_KEY, format: anthropic}
+  # Optional per-role reasoning controls (set from the dashboard CONFIG tab too):
+  # params:
+  #   orchestrator: {thinking: high}     # Anthropic extended thinking (low|medium|high)
+  #   fixer:        {effort: high}       # OpenAI/o-series/codex reasoning_effort (minimal|low|medium|high)
+
+memory:
+  working:   {kind: redis,    url: redis://localhost:6379/0}
+  episodic:  {kind: postgres, dsn: "postgresql://jarvis:${POSTGRES_PASSWORD}@localhost:5432/ai_memory"}
+  # episodic may also set  ledger: /path/to/external.jsonl  (read fallback when postgres is down)
+  semantic:  {kind: none}    # none | mem0 | zep   (add when needed)
+
+notifier:
+  kind: telegram             # telegram | slack | stdout
+  casual: true               # talk like a colleague, not a dashboard
+
+worksource:
+  kind: folder               # folder | gitea | github
+  path: ./tasks              # for 'folder'
+  # for 'gitea', set these in config.yaml (NEVER commit your infra into this example):
+  #   api: http://your-gitea:3000/api/v1
+  #   repo: owner/findings-repo
+  #   token_cmd: /path/to/script-that-prints-a-gitea-token.sh
+
+# Jarvis's hands. Each worker = a command template ({target}) + the action_class it needs.
+# Generic no-op examples here; override in config.yaml with your real tools (deep-fix, fixer).
+# Jarvis only EXECUTES when mode!=shadow AND the action_class is 'allow'; else it records intent.
+workers:
+  deep_fix: {cmd: ["echo","[deep-fix] would investigate {target}"], action_class: propose}
+  fixer:    {cmd: ["echo","[fixer] would open a PR for {target}"], action_class: fix_pr}
+
+# Wake triggers
+wake:
+  heartbeat_seconds: 1800    # floor so it never sleeps forever
+  alert_webhook: true        # Alertmanager -> poke
+  self_schedule: true        # it sets its own next-wake
+
+# The priority ladder the tick triages by (top non-empty rung wins).
+# Young Jarvis works on ITSELF and LEARNS first; it only takes on the production backlog (p3)
+# once it understands its world and has earned trust. Raise p3 up the ladder as it matures.
+priorities:
+  - p0_active_incident         # a fire is always first
+  - p1_unfinished_wip          # never abandon what I started
+  - p2_self_caused_regression  # if I broke something, fix it
+  - p4_self_maintenance        # improve my own tooling / process
+  - p5_curiosity               # learn about my world
+  - p3_needs_human_backlog     # only then work on the system
