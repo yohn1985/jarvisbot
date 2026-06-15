@@ -215,6 +215,18 @@ def status(cfg: dict) -> dict:
     return {"ready": ready, "checks": checks}
 
 
+def _ready_message(cfg: dict) -> str:
+    mode = ((cfg.get("identity") or {}).get("mode") or "shadow")
+    gate = ("I propose and ask — I won't act on my own yet" if mode == "shadow"
+            else "see Settings → Behavior for what I may do on my own")
+    return (f"✓ I'm connected to my brain and running in **{mode}** mode ({gate}).\n\n"
+            "What you can do now:\n"
+            "• Change which models I use → **Settings → Brain & Models**\n"
+            "• Tune what I'm allowed to do on my own → **Settings → Behavior**\n"
+            "• Or just start chatting with me here.\n\n"
+            "Raise my autonomy in Settings whenever you're ready to let me act.")
+
+
 def run(cfg: dict) -> dict:
     st = _load_state()
     checks, asked, resolved, ready = [], [], [], True
@@ -233,4 +245,14 @@ def run(cfg: dict) -> dict:
             if chat_question and _ask(key, ask_fn(cfg), st):
                 asked.append(key)
     _save_state(st)
+    # When everything's ready, tell the owner ONCE what's next (don't leave them at a silent
+    # dashboard wondering). Points them at Settings to change models / tune autonomy.
+    if ready and not st.get("announced_ready"):
+        try:
+            from jarvis import messaging
+            messaging.post_note(_ready_message(cfg), ref="setup:ready", conv="setup", title="Setup")
+            st["announced_ready"] = True
+            _save_state(st)
+        except Exception:
+            pass
     return {"ready": ready, "checks": checks, "asked": asked, "resolved": resolved}
