@@ -183,10 +183,18 @@ def compact_tool_evidence_for_storage(text: str, limit: int = 8000) -> str:
     """Store tool evidence without losing edit-card markers behind large file reads."""
     if not text or len(text) <= limit:
         return text or ""
-    marker_lines = [line for line in text.splitlines() if line.strip().startswith("JARVIS_EDIT ")]
+    marker_lines = []
+    seen_markers = set()
+    for line in text.splitlines():
+        if line.strip().startswith("JARVIS_EDIT ") and line not in seen_markers:
+            marker_lines.append(line)
+            seen_markers.add(line)
     marker_block = "\n".join(marker_lines)
     remaining = max(1000, limit - len(marker_block) - 80)
-    tail = text[-remaining:]
+    tail = "\n".join(
+        line for line in text[-remaining:].splitlines()
+        if not line.strip().startswith("JARVIS_EDIT ")
+    )
     parts = []
     if marker_block:
         parts.append(marker_block)

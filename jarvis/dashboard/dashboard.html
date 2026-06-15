@@ -421,10 +421,10 @@ function visibleThinking(thinking){
   return out.join('\n').trim();
 }
 function editCardsFromThinking(thinking){
-  const cards=[];
+  const cards=[]; const seen=new Set();
   for(const raw of (thinking||'').split('\n')){
     const m=raw.match(/^\s*JARVIS_EDIT\s+(\{.*\})\s*$/);
-    if(m){ try{ cards.push(JSON.parse(m[1])); }catch(e){} }
+    if(m){ try{ const c=JSON.parse(m[1]); const key=JSON.stringify([c.path,c.before||c.old,c.after||c.new]); if(!seen.has(key)){ seen.add(key); cards.push(c); } }catch(e){} }
   }
   return cards.map((c,i)=>editCardHTML(c,i,true)).join('');
 }
