@@ -144,7 +144,10 @@ def fast_local_answer(latest: str, local_docs: str) -> str:
     """Answer simple local-memory lookups without the full model loop."""
     text = local_docs or ""
     low = (latest or "").lower()
-    asks_memory = any(s in low for s in ("what do you know", "do you know", "are you aware", "what is", "what's"))
+    asks_memory = any(s in low for s in (
+        "what do you know", "do you know", "are you aware", "what is", "what's",
+        "where is", "where's", "where are", "where do"
+    ))
     if asks_memory and "Learning gaps relevant to this question:" in text:
         gap = re.search(r"GAP:\s*(.+?)(?:\nSTATUS:|\Z)", text, re.S)
         reason = re.search(r"REASON:\s*(.+?)(?:\nRECORDED:|\Z)", text, re.S)
