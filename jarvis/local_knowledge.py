@@ -423,22 +423,35 @@ def _retrieve_code_index(query: str, cfg: dict | None = None, limit: int = 8) ->
     data = refresh_code_index(cfg)
     hits = []
     for item in data.get("files", []):
+        symbols = item.get("symbols", []) or []
+        matching_symbols = [
+            s for s in symbols
+            if any(t in str(s.get("name", "")).lower() for t in terms)
+        ]
         hay = " ".join([
             str(item.get("path", "")),
             str(item.get("name", "")),
-            " ".join(str(s.get("name", "")) for s in item.get("symbols", []) or []),
+            " ".join(str(s.get("name", "")) for s in symbols),
             " ".join(str(x) for x in item.get("imports", []) or []),
         ]).lower()
         score = sum(1 for t in terms if t in hay)
+        score += len(matching_symbols) * 4
+        if any(t in str(item.get("name", "")).lower() for t in terms):
+            score += 3
         if score:
-            hits.append((score, item))
+            hits.append((score, item, matching_symbols))
     if not hits:
         return ""
     hits.sort(key=lambda pair: (-pair[0], pair[1].get("path", "")))
     lines = ["Code index hits relevant to this question:", "Use these as pointers; read files or run tools before claiming exact behavior."]
-    for _, item in hits[:limit]:
-        syms = ", ".join(str(s.get("name")) for s in (item.get("symbols") or [])[:10] if s.get("name"))
-        lines.append(f"\nCODE: {item.get('path')}\nSYMBOLS: {syms}")
+    for _, item, matching_symbols in hits[:limit]:
+        symbol_source = matching_symbols or (item.get("symbols") or [])[:12]
+        syms = ", ".join(
+            f"{s.get('name')}@{s.get('line')}" if s.get("line") else str(s.get("name"))
+            for s in symbol_source
+            if s.get("name")
+        )
+        lines.append(f"\nCODE: {item.get('path')}\nMATCHING_SYMBOLS: {syms}")
     return "\n".join(lines)[:5000]
 
 
