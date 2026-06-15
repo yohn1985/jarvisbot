@@ -109,10 +109,11 @@
   .mdbody div{ min-height:0; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
   .mdbody ul{ margin:4px 0; padding-left:20px; } .mdbody code{ background:#0c140d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:12px; }
   .mdbody a.mdlink{ color:var(--grntxt); cursor:pointer; text-decoration:underline; }
-  .codeblk{ margin:7px 0 10px; overflow:hidden; background:transparent; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .codeblk{ position:relative; margin:7px 0 10px; overflow:hidden; background:#111312; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px 3px; background:transparent; }
-  .codelang{ color:var(--dim); font-size:10px; letter-spacing:0; } .copybtn{ background:none; border:1px solid rgba(255,255,255,.08); color:var(--dim); font-size:10px; padding:1px 7px; border-radius:3px; cursor:pointer; }
-  .copybtn:hover{ color:var(--txt); border-color:var(--line); } .codeblk pre{ margin:0; padding:8px 12px 10px; max-height:360px; overflow:auto; background:#0a0f0b; } .codeblk code{ color:#c8d6c4; font-size:12px; white-space:pre; line-height:1.45; }
+  .codelang{ color:var(--dim); font-size:10px; letter-spacing:0; } .copybtn{ background:none; border:none; color:var(--dim); font-size:13px; padding:1px 5px; border-radius:3px; cursor:pointer; opacity:.75; }
+  .copybtn:hover{ color:var(--txt); opacity:1; } .codeblk pre{ margin:0; padding:8px 12px 12px; max-height:360px; overflow:auto; background:#1b1e1c; } .codeblk code{ background:transparent; border:0; padding:0; color:#bdc7bd; font-size:12px; white-space:pre; line-height:1.5; }
+  .syn-key{ color:#2aa8ff; } .syn-def{ color:#ff5f6d; } .syn-fn{ color:#f2c66d; } .syn-str{ color:#7ed787; } .syn-num{ color:#e0a85c; } .syn-com{ color:#6f7e6b; font-style:italic; } .syn-dec{ color:#9e8cff; } .syn-type{ color:#ffb454; }
   .thought{ margin:2px 0 8px; } .thtoggle{ display:inline-flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:2px 0; color:var(--dim); }
   .thdot{ width:8px; height:8px; border-radius:50%; background:var(--dim); display:inline-block; } .thlbl{ font-size:12px; color:var(--dim); } .thchev{ font-size:11px; color:var(--dim); }
   .thbody{ margin:6px 0 0 4px; padding-left:10px; border-left:2px solid var(--line); max-height:280px; overflow-y:auto; }
@@ -327,10 +328,46 @@ async function installSkill(name){
 let _cbId=0;
 function codeBlockHTML(b){ const id='cb'+(_cbId++);
   return `<div class="codeblk"><div class="codebar"><span class="codelang">${esc(b.lang||'code')}</span>`+
-    `<button type="button" class="copybtn" onclick="copyCode('${id}',this)">copy</button></div>`+
-    `<pre id="${id}"><code>${esc(b.code)}</code></pre></div>`; }
+    `<button type="button" class="copybtn" title="Copy code" onclick="copyCode('${id}',this)">⧉</button></div>`+
+    `<pre id="${id}"><code>${highlightCode(b.code,b.lang)}</code></pre></div>`; }
+function highlightCode(code,lang){
+  lang=(lang||'').toLowerCase();
+  if(['py','python','python3'].includes(lang)) return highlightPython(code||'');
+  return esc(code||'');
+}
+function highlightPython(code){
+  const kws=new Set('False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '));
+  const types=new Set('bool bytes dict float frozenset int list object set str tuple Path Iterable Optional'.split(' '));
+  return (code||'').split('\n').map(line=>{
+    const out=[]; let i=0;
+    const push=(cls,s)=>out.push(cls?`<span class="${cls}">${esc(s)}</span>`:esc(s));
+    while(i<line.length){
+      const rest=line.slice(i);
+      const str=rest.match(/^([rubfRUBF]{0,2})(("""[\s\S]*?"""|'''[\s\S]*?'''|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'))/);
+      if(str){ push('syn-str',str[0]); i+=str[0].length; continue; }
+      const com=rest.match(/^#.*/);
+      if(com){ push('syn-com',com[0]); break; }
+      const dec=rest.match(/^@[A-Za-z_][\w.]*/);
+      if(dec){ push('syn-dec',dec[0]); i+=dec[0].length; continue; }
+      const num=rest.match(/^\b\d+(?:\.\d+)?\b/);
+      if(num){ push('syn-num',num[0]); i+=num[0].length; continue; }
+      const word=rest.match(/^[A-Za-z_][\w]*/);
+      if(word){
+        const w=word[0], prev=line.slice(0,i).trimEnd(), next=line.slice(i+w.length).trimStart();
+        if(kws.has(w)) push((w==='def'||w==='class'||w==='return'||w==='from'||w==='import')?'syn-key':'syn-key',w);
+        else if(types.has(w)) push('syn-type',w);
+        else if(prev.endsWith('def')||prev.endsWith('class')) push('syn-def',w);
+        else if(next.startsWith('(')) push('syn-fn',w);
+        else push('',w);
+        i+=w.length; continue;
+      }
+      push('',line[i]); i++;
+    }
+    return out.join('');
+  }).join('\n');
+}
 function copyCode(id,btn){ const el=document.getElementById(id); if(!el)return; const txt=el.textContent;
-  const done=()=>{ const o=btn.textContent; btn.textContent='copied'; setTimeout(()=>btn.textContent=o,1200); };
+  const done=()=>{ const o=btn.textContent; btn.textContent='✓'; setTimeout(()=>btn.textContent=o,1200); };
   if(navigator.clipboard&&navigator.clipboard.writeText&&window.isSecureContext){
     navigator.clipboard.writeText(txt).then(done).catch(()=>fallbackCopy(txt,done));
   } else fallbackCopy(txt,done);   // plain HTTP / LAN IP: clipboard API unavailable -> execCommand
