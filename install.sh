@@ -20,6 +20,10 @@
 # ============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+PORT="${JARVIS_PORT:-8787}"
+# Prompts read the REAL terminal (curl|bash makes stdin the pipe, not the keyboard). No tty,
+# or JARVIS_NONINTERACTIVE=1 => silent: take defaults / JARVIS_* env overrides.
+TTY=""; { [ "${JARVIS_NONINTERACTIVE:-0}" != 1 ] && [ -r /dev/tty ]; } && TTY=/dev/tty
 log(){ printf '\033[36m[jarvis]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[33m[jarvis] WARN:\033[0m %s\n' "$*"; }
 die(){ printf '\033[31m[jarvis] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -374,18 +378,102 @@ migrate(){
   "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;s=build_store(load());n=s.migrate_from_jsonl();print('  backend:',s.backend,'| imported',n,'new episodes' if n>=0 else '| no postgres connection — memory uses the jsonl ledger (fine)')"
 }
 
-# 'up' = bring Jarvis up. The Postgres/Redis docker stack is OPTIONAL; without docker Jarvis
-# degrades to the local jsonl ledger. Either way we 'land' the dashboard so there's a cockpit.
-# (The bootstrap installer calls this under `set -e`, so it must never exit non-zero on a box
-#  that simply has no docker — that was the early-beta install failure.)
-up(){   [ -f "$ROOT/.env" ] || { cp "$ROOT/.env.example" "$ROOT/.env" 2>/dev/null; chmod 600 "$ROOT/.env" 2>/dev/null; warn "created .env from example — set real secrets!"; }
-        [ -f "$ROOT/config.yaml" ] || { [ -f "$ROOT/config.example.yaml" ] && cp "$ROOT/config.example.yaml" "$ROOT/config.yaml" && log "created config.yaml from example"; }
-        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-          docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)" || warn "docker stack failed to start — continuing on the local jsonl ledger"
-        else
-          warn "docker not found — running without Postgres/Redis (memory uses the local jsonl ledger). Install Docker, then run 'install.sh up' again for the full stack."
-        fi
-        land; }
+# ---- guided first-run: ask, suggest defaults, never block a non-interactive install ----------
+ask(){ # ask "Question" "default" [ENVVAR]  -> echoes the answer
+  local q="$1" def="$2" ev="${3:-}" ans=""
+  [ -n "$ev" ] && [ -n "${!ev:-}" ] && { printf '%s' "${!ev}"; return; }
+  [ -z "$TTY" ] && { printf '%s' "$def"; return; }
+  printf '\033[36m? %s\033[0m [%s]: ' "$q" "$def" > "$TTY"
+  IFS= read -r ans < "$TTY" || ans=""
+  printf '%s' "${ans:-$def}"
+}
+ask_choice(){ # ask_choice "Question" defaultN ENVVAR opt1 opt2 ...  -> echoes the chosen option text
+  local q="$1" defn="$2" ev="$3"; shift 3; local opts=("$@") n i=1 o
+  [ -n "$ev" ] && [ -n "${!ev:-}" ] && { printf '%s' "${!ev}"; return; }
+  [ -z "$TTY" ] && { printf '%s' "${opts[$((defn-1))]}"; return; }
+  { printf '\033[36m? %s\033[0m\n' "$q"
+    for o in "${opts[@]}"; do printf '   %d) %s%s\n' "$i" "$o" "$([ "$i" -eq "$defn" ] && printf '   [default]')"; i=$((i+1)); done
+    printf '  choose [%d]: ' "$defn"; } > "$TTY"
+  IFS= read -r n < "$TTY" || n=""; n="${n:-$defn}"
+  case "$n" in ''|*[!0-9]*) n="$defn";; esac
+  { [ "$n" -ge 1 ] && [ "$n" -le "${#opts[@]}" ]; } || n="$defn"
+  printf '%s' "${opts[$((n-1))]}"
+}
+
+# Write the guided choices into config.yaml (string edits — no PyYAML needed at install time;
+# config is only READ once PyYAML is present, so this safely takes effect when deps land).
+apply_config(){
+  [ -f "$ROOT/config.yaml" ] || return 0
+  local fb; case "$G_BRAIN" in codex) fb="codex:gpt-5.5";; ollama) fb="ollama:llama3.1";; *) fb="claude:opus";; esac
+  python3 - "$ROOT/config.yaml" "$G_OWNER" "$G_MODE" "$fb" <<'PY' 2>/dev/null || warn "couldn't patch config.yaml — edit owner/mode by hand"
+import re,sys
+p,owner,mode,fb=sys.argv[1:5]
+s=open(p).read()
+s=re.sub(r'(?m)^(  owner:)[^\n#]*', lambda m:m.group(1)+' '+owner+'  ', s, count=1)
+s=re.sub(r'(?m)^(  mode:)\s*\S+',    lambda m:m.group(1)+' '+mode,       s, count=1)
+s=re.sub(r'(?m)^(  fallbacks:)\s*\[[^\]]*\]', lambda m:m.group(1)+' ['+fb+']', s, count=1)
+open(p,'w').write(s)
+PY
+  [ "$G_BRAIN" = ollama ] && warn "ollama brain: set your local model in config.yaml (llm.routing/aliases) or the dashboard (defaulted fallback to ollama:llama3.1)"
+}
+
+guided(){
+  [ -f "$ROOT/config.yaml" ]  || { [ -f "$ROOT/config.example.yaml" ] && cp "$ROOT/config.example.yaml" "$ROOT/config.yaml"; }
+  [ -f "$ROOT/.env" ]         || { cp "$ROOT/.env.example" "$ROOT/.env" 2>/dev/null; chmod 600 "$ROOT/.env" 2>/dev/null; warn "created .env from example — set real secrets there"; }
+  if [ -n "$TTY" ]; then log "Jarvis setup — press Enter to accept each [default]."; else log "non-interactive — using defaults (override with JARVIS_* env vars)."; fi
+
+  G_OWNER="$(ask 'Your name or handle' "${USER:-you}" JARVIS_OWNER)"
+
+  local rundef=1; [ "$(id -u)" -eq 0 ] && rundef=2
+  local run; run="$(ask_choice 'How should Jarvis run?' "$rundef" JARVIS_RUN 'foreground cockpit (~/jarvisbot, no root)' 'durable system service (/opt/jarvis, needs root)')"
+  case "$run" in durable*|service|2) G_RUN=service;; *) G_RUN=foreground;; esac
+
+  local m; m="$(ask_choice 'Autonomy level' 1 JARVIS_MODE 'shadow — propose-only (recommended)' 'assist' 'autonomous')"
+  G_MODE="$(printf '%s' "$m" | awk '{print $1}')"
+
+  local have_docker=0; command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && have_docker=1
+  local memdef=2; [ "$have_docker" -eq 1 ] && memdef=1
+  local mem; mem="$(ask_choice 'Memory backend' "$memdef" JARVIS_MEMORY 'Docker Postgres + Redis (richer memory)' 'local jsonl ledger (no extra services)')"
+  case "$mem" in Docker*|docker|1) G_MEM=docker;; *) G_MEM=ledger;; esac
+  [ "$G_MEM" = docker ] && [ "$have_docker" -eq 0 ] && { warn "Docker unavailable — using the local jsonl ledger instead."; G_MEM=ledger; }
+
+  local opts=(); command -v claude >/dev/null 2>&1 && opts+=('claude (Claude CLI)'); command -v codex >/dev/null 2>&1 && opts+=('codex (Codex CLI)'); command -v ollama >/dev/null 2>&1 && opts+=('ollama (local)'); opts+=('set up later in the dashboard')
+  local brain; brain="$(ask_choice 'Main AI brain' 1 JARVIS_BRAIN "${opts[@]}")"
+  case "$brain" in claude*) G_BRAIN=claude;; codex*) G_BRAIN=codex;; ollama*) G_BRAIN=ollama;; *) G_BRAIN=later;; esac
+
+  G_SUDO=scoped; G_PORT="$PORT"
+  if [ "$G_RUN" = service ]; then
+    local s; s="$(ask_choice 'sudo scope for the jarvis service user' 1 JARVIS_SUDO 'scoped — apt-get + systemctl only (recommended)' 'full root')"
+    case "$s" in full*|yolo) G_SUDO=yolo;; *) G_SUDO=scoped;; esac
+    G_PORT="$(ask 'Dashboard port' "$PORT" JARVIS_PORT)"; PORT="$G_PORT"
+  fi
+
+  apply_config
+  printf '\033[36m[jarvis]\033[0m chosen: owner=%s · run=%s · mode=%s · memory=%s · brain=%s%s\n' \
+    "$G_OWNER" "$G_RUN" "$G_MODE" "$G_MEM" "$G_BRAIN" "$([ "$G_RUN" = service ] && printf ' · sudo=%s · port=%s' "$G_SUDO" "$G_PORT")"
+}
+
+# 'up' = the guided bring-up the bootstrap calls. Must never exit non-zero on a box without
+# docker (the bootstrap runs it under `set -e`) — that was the early-beta install failure.
+up(){
+  guided
+  if [ "$G_RUN" = service ]; then
+    if [ "$(id -u)" -eq 0 ]; then JARVIS_SUDO="$G_SUDO" JARVIS_PORT="$G_PORT" install_service
+    else
+      log "durable service needs root — re-running just the service step with sudo…"
+      sudo -E JARVIS_NONINTERACTIVE=1 JARVIS_SUDO="$G_SUDO" JARVIS_PORT="$G_PORT" \
+        JARVIS_SERVICE_DIR="${JARVIS_SERVICE_DIR:-/opt/jarvis}" "$ROOT/install.sh" install-service \
+        || warn "service install failed — retry later with: sudo ./install.sh install-service"
+    fi
+    return 0
+  fi
+  if [ "$G_MEM" = docker ]; then
+    docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)" || warn "docker stack failed to start — continuing on the local jsonl ledger"
+  else
+    log "memory: local jsonl ledger (no Docker stack started)"
+  fi
+  land
+}
 down(){ command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || { warn "no docker — nothing to bring down"; return 0; }
         docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
 
@@ -411,7 +499,7 @@ skill_cmd(){
 doctor(){
   deps; echo
   log "fitness (tamper-proof self-check):"; "$(pybin)" "$ROOT/jarvis/safety/fitness.py" 2>/dev/null | sed 's/^/  /'
-  log "dashboard:"; ss -ltnp 2>/dev/null | grep -q ':8787' && log "  up on :8787" || warn "  not running (./install.sh dashboard)"
+  log "dashboard:"; ss -ltnp 2>/dev/null | grep -q ":${PORT}" && log "  up on :${PORT}" || warn "  not running (./install.sh dashboard)"
   log "memory backends:"; "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;from jarvis.memory.working import build_working;c=load();print('  episodic:',build_store(c).backend,'| working:',build_working(c).backend)" 2>/dev/null
 }
 
@@ -419,19 +507,19 @@ doctor(){
 dash_token(){ local f="$ROOT/state/dashboard_token"; mkdir -p "$ROOT/state"
   [ -s "$f" ] || { python3 -c "import secrets;print(secrets.token_urlsafe(24))" > "$f"; chmod 600 "$f" 2>/dev/null; }
   cat "$f"; }
-dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:8787/?token=$(dash_token)"; }
+dash_url(){ local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"; echo "http://${ip:-127.0.0.1}:${PORT}/?token=$(dash_token)"; }
 
 # Bring the dashboard up (stdlib only — works before any deps/brain exist) so the owner has a
 # place to watch Jarvis and answer its setup questions. Backgrounded + detached; the durable
 # systemd service is installed later via the approved plan.
 dashboard_up(){
   mkdir -p "$ROOT/state"
-  if ss -ltn 2>/dev/null | grep -q ':8787 '; then log "dashboard already up"; return; fi
-  setsid nohup "$(pybin)" "$ROOT/jarvis/dashboard/server.py" --host 0.0.0.0 --port 8787 \
+  if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then log "dashboard already up"; return; fi
+  setsid nohup "$(pybin)" "$ROOT/jarvis/dashboard/server.py" --host 0.0.0.0 --port "$PORT" \
     >"$ROOT/state/dashboard.log" 2>&1 </dev/null &
   echo $! > "$ROOT/state/dashboard.pid"
   sleep 1
-  if ss -ltn 2>/dev/null | grep -q ':8787 '; then log "dashboard started (pid $(cat "$ROOT/state/dashboard.pid"))"
+  if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then log "dashboard started (pid $(cat "$ROOT/state/dashboard.pid"))"
   else warn "dashboard may not have started — see $ROOT/state/dashboard.log"; fi
 }
 
@@ -492,7 +580,7 @@ After=network-online.target
 Type=simple
 User=$U
 WorkingDirectory=$DIR
-ExecStart=$DIR/install.sh dashboard --host 0.0.0.0 --port 8787
+ExecStart=$DIR/install.sh dashboard --host 0.0.0.0 --port ${PORT}
 Restart=always
 RestartSec=5
 [Install]
@@ -507,7 +595,7 @@ EOF
   log "service installed + enabled (survives reboot). dashboard: $(dash_url)"
 }
 
-case "${1:-scaffold}" in
+case "${1:-up}" in
   scaffold) scaffold; echo; deps; echo; land;;
   setup|land) land;;
   install-service|service) install_service;;
