@@ -740,7 +740,7 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
                 existing_ids = _memory_identifiers(str(row.get("fact") or ""))
                 if fact.lower() == str(row.get("fact") or "").lower():
                     return False
-                if wanted_ids and existing_ids and not (wanted_ids & existing_ids):
+                if (wanted_ids or existing_ids) and not (wanted_ids & existing_ids):
                     continue
                 if wanted and existing and len(wanted & existing) >= max(3, min(len(wanted), len(existing)) // 2):
                     return False
