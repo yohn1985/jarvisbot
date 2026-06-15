@@ -327,7 +327,7 @@ def edit_file(path: str, old: str, new: str, owner_text: str = "", explicit: boo
         if count > 1:
             return {"ok": False, "tool": "edit", "path": str(p), "error": f"old text appears {count} times; provide a more specific edit"}
         p.write_text(data.replace(old, new, 1))
-        return {"ok": True, "tool": "edit", "path": str(p), "output": "edited file"}
+        return {"ok": True, "tool": "edit", "path": str(p), "output": "edited file", "old": old, "new": new}
     except Exception as e:
         return {"ok": False, "tool": "edit", "path": raw, "error": str(e)[:300]}
 
@@ -503,7 +503,12 @@ def format_result(result: dict) -> str:
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "edit":
         if result.get("ok"):
-            return f"{result.get('output')}: {result.get('path')}"
+            marker = {
+                "path": result.get("path"),
+                "old": str(result.get("old") or "")[:1200],
+                "new": str(result.get("new") or "")[:1200],
+            }
+            return f"{result.get('output')}: {result.get('path')}\nJARVIS_EDIT {json.dumps(marker, sort_keys=True)}"
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "search":
         if result.get("ok"):
