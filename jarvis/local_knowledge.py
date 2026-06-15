@@ -783,7 +783,10 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
 def _memory_identifiers(text: str) -> set[str]:
     """Identifiers make similar facts distinct: ticket IDs, canaries, hostnames with digits, etc."""
     low = (text or "").lower()
-    ids = set(re.findall(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b", low))
+    ids = set()
+    for token in re.findall(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b", low):
+        if any(ch.isdigit() for ch in token) or token.count("-") >= 2:
+            ids.add(token)
     ids.update(re.findall(r"\b[a-z0-9._-]*\d[a-z0-9._-]*\b", low))
     return {x for x in ids if len(x) >= 4}
 
