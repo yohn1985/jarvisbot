@@ -9,8 +9,8 @@
    ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
 ```
 
-**A standalone, self-improving autonomous agent that lands on a machine, sets itself up,
-learns its world, and works for you.**
+**A self-hosted autonomous agent that onboards like a new hire: it lands on a machine, learns its
+environment, and stays propose-only until you trust it with real work.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-3fae5a.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-EARLY%20BETA-d8a13a.svg)
@@ -33,14 +33,17 @@ learns its world, and works for you.**
 
 ## What it is
 
-Jarvis is a persistent agent runtime built around one idea: **a bounded loop with a real mind.**
-Every wake it rebuilds its own context from durable memory, perceives its world, decides **one**
-thing to do, (optionally) does it, and writes back what it learned — then it sleeps until the next
-wake. It pure-Python bootstraps itself onto a fresh Linux box, autodiscovers its environment,
-keeps a knowledge base, and talks to you through a web dashboard.
+Jarvis is a persistent agent runtime built around one idea: a bounded loop with a real mind that you
+can actually trust over time. Every wake it rebuilds its own context from durable memory, perceives
+its world, decides **one** thing to do, optionally does it, and writes back what it learned, then it
+sleeps until the next wake.
 
-It is **skeptical by design**: it doesn't trust a conclusion until that conclusion has *survived an
-adversarial red-team* — and it routes what it can't verify to you instead of guessing.
+When it lands on a machine it **onboards like a new hire.** It pure-Python bootstraps itself onto a
+fresh Linux box, learns its environment (services, network, how things connect), keeps a knowledge
+base, and talks to you through a web dashboard. It stays **propose-only** while it is still learning.
+
+It is **skeptical by design.** It doesn't trust a conclusion until that conclusion has survived an
+adversarial red-team, and it routes what it can't verify to you instead of guessing.
 
 ## Quickstart
 
@@ -113,6 +116,18 @@ directly; `install.sh` never overwrites them.
 
 Early beta and moving fast. The core loop, memory, model router, dashboard, skills, and the
 self-modification **seatbelt** are in place. (The seatbelt is the safety harness — Jarvis does **not** autonomously edit its own code yet.) Expect rough edges; issues and PRs welcome.
+
+## Roadmap
+
+Today Jarvis onboards and assists in propose-only mode. The direction is a **roles** system: once it
+knows your environment well enough, you teach it a job by showing it, and it grows into owning that
+responsibility one trust-gated step at a time, judged on outcomes rather than handed over wholesale.
+
+The roles are **yours to define.** Whatever you would hand a capable junior is fair game (watching an
+alert stream, tending a pipeline, taking first pass at a class of tickets, whatever your work is).
+This is the plan, not a shipped feature yet. The current foundation (propose-only defaults,
+fail-closed verification, action-class gating, the self-mod seatbelt) exists precisely so capability
+can be granted carefully instead of blindly.
 
 ## Contributing
 
