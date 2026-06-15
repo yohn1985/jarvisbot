@@ -344,9 +344,14 @@ deps(){
   local install="${1:-}"
   log "checking prerequisites..."
   local missing=()
-  for c in python3 docker; do command -v "$c" >/dev/null 2>&1 && log "  ok   $c" || { warn "  MISSING $c"; missing+=("$c"); }; done
+  for c in python3; do command -v "$c" >/dev/null 2>&1 && log "  ok   $c" || { warn "  MISSING $c (required)"; missing+=("$c"); }; done
+  # docker is OPTIONAL — without it Jarvis runs on the local jsonl ledger (no Postgres/Redis).
+  if command -v docker >/dev/null 2>&1; then
+    docker compose version >/dev/null 2>&1 && log "  ok   docker + compose (optional: Postgres/Redis)" || warn "  docker present but no 'compose' plugin (optional)"
+  else
+    warn "  no docker (optional) — Jarvis runs on the local jsonl ledger without it"
+  fi
   for c in claude codex ollama; do command -v "$c" >/dev/null 2>&1 && log "  ok   $c (LLM backend)" || warn "  missing $c CLI (optional backend)"; done
-  command -v docker >/dev/null 2>&1 && (docker compose version >/dev/null 2>&1 && log "  ok   docker compose" || warn "  missing 'docker compose' plugin")
   [ -f "$ROOT/config.yaml" ] && log "  ok   config.yaml" || warn "  no config.yaml yet (copy from config.example.yaml)"
   [ -f "$ROOT/.env" ] && log "  ok   .env" || warn "  no .env yet (copy from .env.example, add secrets)"
   if [ "$install" = "--install" ] && [ "${#missing[@]}" -gt 0 ]; then
@@ -355,6 +360,7 @@ deps(){
 }
 
 initdb(){
+  command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || { warn "no docker — skipping Postgres schema (memory uses the jsonl ledger)"; return 0; }
   [ -f "$ROOT/.env" ] && set -a && . "$ROOT/.env" && set +a || true
   log "applying db/schema.sql to ai_memory..."
   docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
@@ -368,9 +374,20 @@ migrate(){
   "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.config import load;from jarvis.memory.store import build_store;s=build_store(load());n=s.migrate_from_jsonl();print('  backend:',s.backend,'| imported',n,'new episodes' if n>=0 else '| no postgres connection — memory uses the jsonl ledger (fine)')"
 }
 
-up(){   [ -f "$ROOT/.env" ] || { cp "$ROOT/.env.example" "$ROOT/.env"; chmod 600 "$ROOT/.env" 2>/dev/null; warn "created .env from example — set real secrets!"; }
-        docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)"; }
-down(){ docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
+# 'up' = bring Jarvis up. The Postgres/Redis docker stack is OPTIONAL; without docker Jarvis
+# degrades to the local jsonl ledger. Either way we 'land' the dashboard so there's a cockpit.
+# (The bootstrap installer calls this under `set -e`, so it must never exit non-zero on a box
+#  that simply has no docker — that was the early-beta install failure.)
+up(){   [ -f "$ROOT/.env" ] || { cp "$ROOT/.env.example" "$ROOT/.env" 2>/dev/null; chmod 600 "$ROOT/.env" 2>/dev/null; warn "created .env from example — set real secrets!"; }
+        [ -f "$ROOT/config.yaml" ] || { [ -f "$ROOT/config.example.yaml" ] && cp "$ROOT/config.example.yaml" "$ROOT/config.yaml" && log "created config.yaml from example"; }
+        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+          docker compose -f "$ROOT/docker-compose.yml" up -d && log "stack up (postgres + redis)" || warn "docker stack failed to start — continuing on the local jsonl ledger"
+        else
+          warn "docker not found — running without Postgres/Redis (memory uses the local jsonl ledger). Install Docker, then run 'install.sh up' again for the full stack."
+        fi
+        land; }
+down(){ command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || { warn "no docker — nothing to bring down"; return 0; }
+        docker compose -f "$ROOT/docker-compose.yml" down && log "stack down"; }
 
 pybin(){ [ -x "$ROOT/.venv/bin/python" ] && echo "$ROOT/.venv/bin/python" || echo python3; }
 breathe(){ log "one tick:"; "$(pybin)" "$ROOT/jarvis/kernel.py"; }
