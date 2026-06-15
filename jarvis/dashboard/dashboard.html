@@ -365,6 +365,21 @@ function thoughtBlock(content,id,streaming){
 }
 function toggleThought(id){ const b=document.getElementById('th-'+id); if(!b)return; const body=b.querySelector('.thbody'),chev=b.querySelector('.thchev');
   const open=body.hidden; body.hidden=!open; chev.textContent=open?'▴':'▾'; }
+function worklogFromThinking(thinking){
+  const steps=[];
+  for(const raw of (thinking||'').split('\n')){
+    let line=raw.trim();
+    if(!line.startsWith('Harness:')) continue;
+    line=line.replace(/^Harness:\s*/,'').trim();
+    if(!line || line==='reflection queued') continue;
+    if(line.startsWith('local evidence gathered')) line='collected local evidence';
+    if(line.startsWith('tool evidence gathered')) line='collected tool evidence';
+    if(!steps.length || steps[steps.length-1]!==line) steps.push(line);
+  }
+  if(!steps.length) return '';
+  const show=steps.slice(-8);
+  return '<div class="worklog">'+show.map((s,i)=>`<div class="workstep"><span class="thdot${i===show.length-1?' pulse':''}"></span><span>${esc(s)}</span></div>`).join('')+'</div>';
+}
 function selectDoc(i){ knowledgeSel=i; _kwSig=''; renderKnowledge(knowledgeDocs); }
 function selectDocByName(n){ const i=knowledgeDocs.findIndex(d=>d.name===n); if(i>=0) selectDoc(i); }
 function knowledgeGroupName(name){
@@ -593,7 +608,7 @@ function renderBody(m){
   if(isJ && !isQ){
     const sp=splitThinking(m.text); const hasField=m.thinking&&m.thinking.trim();
     const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
-    body=(thinking?thoughtBlock(thinking,m.id,!!m.streaming):'')+'<div class="mdbody">'+md(bodyText)+'</div>'+
+    body=(!m.streaming?worklogFromThinking(thinking):'')+(thinking?thoughtBlock(thinking,m.id,!!m.streaming):'')+'<div class="mdbody">'+md(bodyText)+'</div>'+
          (m.streaming?'<span class="cursor">▌</span>':'');
   } else {
     const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
