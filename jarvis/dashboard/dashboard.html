@@ -169,7 +169,7 @@
 <body>
 <header>
   <div class="title">● JARVIS <span class="beta">EARLY BETA</span></div>
-  <div class="meta"><span id="procs">0 procs</span> · mode <span id="mode">—</span> · updated <span id="upd">—</span>
+  <div class="meta"><span id="procs">0 procs</span> · mode <span id="mode">—</span> · self-test <span id="train">—</span> · updated <span id="upd">—</span>
      <button type="button" class="refresh" onclick="load()">refresh</button></div>
 </header>
 <nav>
@@ -469,11 +469,12 @@ async function approve(){
   load();
 }
 async function load(){
-  const [runs,cfg,procs,convs,setup,disc,skl,mdl] = await Promise.all([
+  const [runs,cfg,procs,convs,setup,disc,skl,mdl,train] = await Promise.all([
     fetch('/api/runs').then(r=>r.json()), fetch('/api/config').then(r=>r.json()),
     fetch('/api/procs').then(r=>r.json()), fetch('/api/conversations').then(r=>r.json()),
     fetch('/api/setup').then(r=>r.json()), fetch('/api/discovery').then(r=>r.json()),
-    fetch('/api/skills').then(r=>r.json()), fetch('/api/models').then(r=>r.json())]);
+    fetch('/api/skills').then(r=>r.json()), fetch('/api/models').then(r=>r.json()),
+    fetch('/api/training-status').then(r=>r.json()).catch(()=>({status:'unknown'}))]);
   setupState=setup; renderKnowledge(disc); renderSkills(skl); renderModels(mdl);
   if(!booted){ booted=true; show('chat'); if(!setup.complete) activeConv='setup'; }
   if(!activeConv && convs.length) activeConv = convs[0].id;
@@ -509,6 +510,7 @@ async function load(){
   const c=(cfg.config)||{}; const idn=c.identity||{};
   _defaultSystemPrompt = cfg.default_system_prompt || '';
   const md=document.getElementById('mode'); if(md){ md.textContent=idn.mode||'—'; md.className='mode-'+(idn.mode||''); }
+  const tr=document.getElementById('train'); if(tr){ tr.textContent=(train&&train.status)||'—'; tr.style.color=(train&&train.ok)?'var(--grntxt)':((train&&train.status==='fail')?'var(--red)':'var(--dim)'); }
   const orch=((c.llm||{}).routing||{}).orchestrator||'';
   const cm=document.getElementById('chip-model'); if(cm) cm.textContent=(orch.split(':')[1]||orch||'brain');
   const cmo=document.getElementById('chip-mode'); if(cmo) cmo.textContent=idn.mode||'shadow';

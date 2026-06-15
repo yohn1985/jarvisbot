@@ -422,6 +422,24 @@ def _env_context(limit=4000):
     return docs[0]["content"][:limit] if docs else ""
 
 
+def _training_status():
+    d = ROOT / "workspace" / "knowledge" / "evals"
+    try:
+        files = sorted(d.glob("*-self-training.json"))
+        if not files:
+            return {"ok": None, "status": "unknown"}
+        data = json.loads(files[-1].read_text(encoding="utf-8"))
+        return {
+            "ok": bool(data.get("ok")),
+            "status": "pass" if data.get("ok") else "fail",
+            "ts": data.get("ts"),
+            "cases": len(data.get("cases", []) or []),
+            "failed": [c.get("name") for c in (data.get("cases", []) or []) if not c.get("ok")],
+        }
+    except Exception as e:
+        return {"ok": False, "status": "error", "error": str(e)[:200]}
+
+
 UPLOADS = ROOT / "state" / "uploads"
 _IMG_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
 
@@ -1073,6 +1091,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_setup_state()))
         if u.path == "/api/discovery":
             return self._send(200, json.dumps(_discovery()))
+        if u.path == "/api/training-status":
+            return self._send(200, json.dumps(_training_status()))
         if u.path == "/api/skills":
             return self._send(200, json.dumps(_skills()))
         if u.path == "/api/models":
