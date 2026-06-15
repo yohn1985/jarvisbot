@@ -706,13 +706,13 @@ def _chat_reply(conv):
         name = ident.get("name", "Jarvis")
         from jarvis import harness
         mid = messaging.stream_start(conv)
-        buf = {"t": "", "th": "", "last": 0.0}
+        buf = {"t": "", "th": "", "ev": "", "last": 0.0}
 
         def status_note(text):
             line = f"Harness: {text}\n"
-            buf["th"] += line
+            buf["ev"] += line
             st.emit("status", text)
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
 
         env = _env_context()
         if harness.learn_owner_correction_now(last):
@@ -728,12 +728,12 @@ def _chat_reply(conv):
             status_note("grounded in operating prompt; no local context files found")
         compact_local = harness.compact_evidence(local_docs)
         if compact_local:
-            buf["th"] += "\nHarness: local evidence gathered for follow-up questions\n" + compact_local + "\n"
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
+            buf["ev"] += "\nHarness: local evidence gathered for follow-up questions\n" + compact_local + "\n"
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
         fast = harness.fast_local_answer(last, local_docs)
         if fast:
             status_note("answered from local memory without full tool loop")
-            messaging.stream_end(mid, fast, thinking=buf["th"])
+            messaging.stream_end(mid, fast, thinking=buf["th"], evidence=buf["ev"])
             st.emit("text", fast)
             st.emit("done", fast)
             _stream_close(conv)
@@ -767,8 +767,8 @@ def _chat_reply(conv):
                 web_ctx = ""
         tool_ctx = harness.collect_tool_evidence(llm, base, last, status=status_note)
         if tool_ctx:
-            buf["th"] += "\nHarness: tool evidence gathered for follow-up questions\n" + tool_ctx[:6000] + "\n"
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"])
+            buf["ev"] += "\nHarness: tool evidence gathered for follow-up questions\n" + tool_ctx[:6000] + "\n"
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
             status_note("summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
@@ -780,7 +780,7 @@ def _chat_reply(conv):
             st.emit(kind, d)                          # per-token push to the browser (SSE)
             now = time.time()
             if now - buf["last"] > 0.5:               # persistence throttle (SSE is the live path)
-                messaging.stream_update(mid, buf["t"], thinking=buf["th"]); buf["last"] = now
+                messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"]); buf["last"] = now
 
         prompt = (base + (f"\nLIVE WEB EVIDENCE:\n{web_ctx}\n" if web_ctx else "")
                   + (f"\nLOCAL TOOL EVIDENCE:\n{tool_ctx}\n" if tool_ctx else "")
@@ -806,7 +806,7 @@ def _chat_reply(conv):
         if st.cancelled:
             full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
         repair = harness.repair_unexecuted_command_plan(
-            llm, last, full or buf["t"], "" if tool_ctx else buf["th"], status=status_note
+            llm, last, full or buf["t"], buf["th"], status=status_note
         )
         if repair:
             full = repair
@@ -815,7 +815,7 @@ def _chat_reply(conv):
             status_note("reflection queued")
         except Exception:
             pass
-        messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"])
+        messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"], evidence=buf["ev"])
         st.emit("done", full)
         _stream_close(conv)
         def _reflect_later():

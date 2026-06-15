@@ -109,16 +109,17 @@ def run(base: str, token: str) -> dict:
     priority_before_48, priority_after_48 = _load_priority_values(code_path)
     text = (msg.get("text") or "")
     thinking = (msg.get("thinking") or "")
+    trace = thinking + "\n" + (msg.get("evidence") or "")
     cases.append(_case(
         "real Python code edit emits visible edit marker",
         "age_hours > 48" in current
         and ("25" in current or "0.25" in current)
         and priority_after_48 >= priority_before_48 + 20.0
-        and "JARVIS_EDIT" in thinking
+        and "JARVIS_EDIT" in trace
         and "calculate_priority" in text,
         (
             f"ANSWER:\n{text}\n\n"
-            f"THINKING_HAS_MARKER:{'JARVIS_EDIT' in thinking}\n"
+            f"TRACE_HAS_MARKER:{'JARVIS_EDIT' in trace}\n"
             f"PRIORITY_47H:{priority_before_48}\n"
             f"PRIORITY_49H:{priority_after_48}\n\n"
             f"SNIP:\n{current[current.find('def calculate_priority'):current.find('def calculate_priority') + 900]}"
@@ -181,16 +182,17 @@ def run(base: str, token: str) -> dict:
     edited = route_path.read_text(encoding="utf-8", errors="replace")
     edit_text = msg.get("text") or ""
     edit_thinking = msg.get("thinking") or ""
+    edit_trace = edit_thinking + "\n" + (msg.get("evidence") or "")
     cases.append(_case(
         "natural-language named-function edit changes behavior and emits edit marker",
         routed_low == "product-oncall"
         and routed_high == "finance-oncall"
         and routed_critical == "finance-oncall"
-        and "JARVIS_EDIT" in edit_thinking
+        and "JARVIS_EDIT" in edit_trace
         and "route_incident" in edit_text,
         (
             f"ANSWER:\n{edit_text}\n\n"
-            f"THINKING_HAS_MARKER:{'JARVIS_EDIT' in edit_thinking}\n"
+            f"TRACE_HAS_MARKER:{'JARVIS_EDIT' in edit_trace}\n"
             f"BILLING_LOW:{routed_low}\n"
             f"BILLING_HIGH:{routed_high}\n"
             f"BILLING_CRITICAL:{routed_critical}\n\n"

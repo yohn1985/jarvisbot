@@ -69,6 +69,7 @@
   #chatlog::-webkit-scrollbar{ width:8px; } #chatlog::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
   .row{ display:flex; flex-direction:column; gap:2px; max-width:100%; }
   .row.orow{ align-items:flex-end; } .row.jrow{ align-items:flex-start; }
+  .turnhead{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:0 4px; text-transform:uppercase; }
   .row .ts{ color:var(--dim); font-size:10px; padding:0 4px; }
   .msg{ padding:9px 12px; border-radius:12px; max-width:78%; white-space:pre-wrap; }
   .msg.jarvis{ background:transparent; border:none; max-width:100%; padding:2px 2px; white-space:normal; }
@@ -394,10 +395,22 @@ function worklogFromThinking(thinking){
 }
 function visibleThinking(thinking){
   const out=[];
+  let skippingEvidence=false;
   for(const raw of (thinking||'').split('\n')){
-    const line=raw.trimEnd();
+    let line=raw.trimEnd();
     const t=line.trim();
     if(!t) continue;
+    if(t.startsWith('Harness: local evidence gathered')||t.startsWith('Harness: tool evidence gathered')){
+      skippingEvidence=true;
+      continue;
+    }
+    if(t.startsWith('Harness: summarizing')){
+      skippingEvidence=false;
+      continue;
+    }
+    if(skippingEvidence) continue;
+    line=line.replace(/\s*Harness:\s*reflection queued\s*$/,'').trimEnd();
+    if(!line.trim()) continue;
     if(t.startsWith('Harness:')) continue;
     if(t.startsWith('JARVIS_EDIT ')) continue;
     if(t.startsWith('SOURCE:')||t.startsWith('TITLE:')||t.startsWith('CODE:')||t.startsWith('MATCHING_SYMBOLS:')) continue;
@@ -653,8 +666,9 @@ function renderBody(m){
   if(isJ && !isQ){
     const sp=splitThinking(m.text); const hasField=m.thinking&&m.thinking.trim();
     const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
+    const evidence=m.evidence||thinking;
     const activity=m.streaming?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Thinking...')}</span></div>`:'';
-    const edits=!m.streaming?editCardsFromThinking(thinking):'';
+    const edits=!m.streaming?editCardsFromThinking(evidence):'';
     const shownThought=visibleThinking(thinking);
     const visible=(bodyText||'').trim();
     body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
@@ -680,18 +694,18 @@ function renderChat(msgs){
       const tb=cl.querySelector('[data-mid="'+streamMsg.id+'"] .thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
       if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
       return; } }
-  const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,m.streaming?((m.text||'').length+'.'+(m.thinking||'').length):0]))+'|'+brainChoice+'|'+
+  const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,m.streaming?((m.text||'').length+'.'+(m.thinking||'').length+'.'+(m.evidence||'').length):0]))+'|'+brainChoice+'|'+
     (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
   if(chatSig===_chatSig) return; _chatSig=chatSig; _chatIds=ids; _chatConv=activeConv;
   const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
   cl.innerHTML='';
   for(const m of msgs){
     const isJ=m.from==='jarvis', isQ=m.kind==='question'; const ts=(m.ts||'').replace('T',' ').slice(0,16);
-    cl.insertAdjacentHTML('beforeend',`<div class="row ${isJ?'jrow':'orow'}" data-mid="${m.id}"><div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">${renderBody(m)}</div><div class="ts">${ts}</div></div>`);
+    cl.insertAdjacentHTML('beforeend',`<div class="row ${isJ?'jrow':'orow'}" data-mid="${m.id}"><div class="turnhead">${isJ?'Jarvis':'You'}</div><div class="msg ${isJ?'jarvis':'owner'} ${isQ?'q':''}">${renderBody(m)}</div><div class="ts">${ts}</div></div>`);
   }
   const lastm=msgs[msgs.length-1];
   if(lastm && lastm.from==='owner' && (lastm.kind==='message'||lastm.kind==='note')){
-    cl.insertAdjacentHTML('beforeend','<div class="row jrow"><div class="msg jarvis"><div class="thinking-live"><span class="thdot pulse"></span>Thinking…</div></div></div>');
+    cl.insertAdjacentHTML('beforeend','<div class="row jrow"><div class="turnhead">Jarvis</div><div class="msg jarvis"><div class="thinking-live"><span class="thdot pulse"></span>Thinking…</div></div></div>');
   }
   renderSetupCard(cl);
   cl.querySelectorAll('.thought .thbody:not([hidden])').forEach(b=>{ b.scrollTop=b.scrollHeight; });
@@ -738,7 +752,7 @@ async function say(){
   const cl=document.getElementById('chatlog');
   if(cl){ const ts=new Date().toISOString().replace('T',' ').slice(0,16);
     const thumbs=imgs.map(p=>`<img class="msgimg" src="${p.data}"/>`).join('');
-    cl.insertAdjacentHTML('beforeend',`<div class="row orow"><div class="msg owner">${thumbs}${esc(v)}</div><div class="ts">${ts}</div></div>`);
+    cl.insertAdjacentHTML('beforeend',`<div class="row orow"><div class="turnhead">You</div><div class="msg owner">${thumbs}${esc(v)}</div><div class="ts">${ts}</div></div>`);
     cl.scrollTop=cl.scrollHeight; }
   _pending=[]; renderAttach();
   const isSlash=v.startsWith('/');
@@ -765,7 +779,7 @@ function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close
 function renderLive(){
   const cl=document.getElementById('chatlog'); if(!cl) return;
   let row=cl.querySelector('[data-mid="sse-live"]');
-  if(!row){ cl.insertAdjacentHTML('beforeend','<div class="row jrow" data-mid="sse-live"><div class="msg jarvis"></div></div>'); row=cl.querySelector('[data-mid="sse-live"]'); }
+  if(!row){ cl.insertAdjacentHTML('beforeend','<div class="row jrow" data-mid="sse-live"><div class="turnhead">Jarvis</div><div class="msg jarvis"></div></div>'); row=cl.querySelector('[data-mid="sse-live"]'); }
   const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,status:_live.status,streaming:true};
   row.querySelector('.msg').innerHTML=renderBody(m);
   const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;

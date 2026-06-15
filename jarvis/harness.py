@@ -135,7 +135,7 @@ def _transcript_turn(m: dict) -> str:
     if m.get("from") == "owner":
         return "Owner: " + text
     out = "Jarvis: " + text
-    evidence = _compact_prior_thinking(m.get("thinking") or "")
+    evidence = _compact_prior_thinking(m.get("evidence") or m.get("thinking") or "")
     if evidence:
         out += "\nJarvis prior evidence/status:\n" + evidence
     return out

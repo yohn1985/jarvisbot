@@ -158,7 +158,7 @@ def stream_start(conv: str = "general") -> str:
     """Begin a streamed Jarvis reply: an empty message marked streaming. Returns its id."""
     mid = uuid.uuid4().hex[:8]
     _append({"id": mid, "ts": _now(), "from": "jarvis", "conv": conv,
-             "kind": "message", "text": "", "thinking": "", "ref": "", "streaming": True})
+             "kind": "message", "text": "", "thinking": "", "evidence": "", "ref": "", "streaming": True})
     return mid
 
 
@@ -183,20 +183,22 @@ def _mutate(fn) -> bool:
     return bool(changed)
 
 
-def stream_update(mid: str, text: str, thinking: str | None = None) -> None:
-    """Set the running text (and thinking) of a streaming message — the dashboard shows it grow."""
+def stream_update(mid: str, text: str, thinking: str | None = None, evidence: str | None = None) -> None:
+    """Set the running text, model thinking, and internal evidence of a streaming message."""
     def fn(rows):
         for m in rows:
             if m.get("id") == mid:
                 m["text"] = text
                 if thinking is not None:
                     m["thinking"] = thinking
+                if evidence is not None:
+                    m["evidence"] = evidence
                 return True
         return False
     _mutate(fn)
 
 
-def stream_end(mid: str, text: str | None = None, thinking: str | None = None) -> None:
+def stream_end(mid: str, text: str | None = None, thinking: str | None = None, evidence: str | None = None) -> None:
     """Finalize a streamed message (clears the streaming flag / cursor)."""
     def fn(rows):
         for m in rows:
@@ -205,6 +207,8 @@ def stream_end(mid: str, text: str | None = None, thinking: str | None = None) -
                     m["text"] = text
                 if thinking is not None:
                     m["thinking"] = thinking
+                if evidence is not None:
+                    m["evidence"] = evidence
                 m["streaming"] = False
                 return True
         return False
