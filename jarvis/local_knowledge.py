@@ -594,6 +594,7 @@ def _retrieve_learned_memories(query: str, limit: int = 5) -> str:
     terms = _terms(query)
     if not terms:
         return ""
+    query_ids = _memory_identifiers(query)
     hits = []
     try:
         if LEARNED.exists():
@@ -601,8 +602,12 @@ def _retrieve_learned_memories(query: str, limit: int = 5) -> str:
                 if not line.strip():
                     continue
                 row = json.loads(line)
+                fact = str(row.get("fact") or "")
+                row_ids = _memory_identifiers(" ".join([fact, " ".join(str(k) for k in row.get("keywords", []) or [])]))
+                if row_ids and not (query_ids & row_ids):
+                    continue
                 hay = " ".join([
-                    str(row.get("fact") or ""),
+                    fact,
                     " ".join(str(k) for k in row.get("keywords", []) or []),
                     str(row.get("scope") or ""),
                     str(row.get("source") or ""),
@@ -635,6 +640,7 @@ def _retrieve_learning_gaps(query: str, limit: int = 4) -> str:
     terms = _terms(query)
     if not terms:
         return ""
+    query_ids = _memory_identifiers(query)
     hits = []
     try:
         if LEARNING_DEBT.exists():
@@ -642,6 +648,9 @@ def _retrieve_learning_gaps(query: str, limit: int = 4) -> str:
                 if not line.strip():
                     continue
                 row = json.loads(line)
+                row_ids = _memory_identifiers(" ".join(str(row.get(k, "")) for k in ("question", "answer", "reason")))
+                if row_ids and not (query_ids & row_ids):
+                    continue
                 hay = " ".join(str(row.get(k, "")) for k in ("question", "answer", "reason", "status")).lower()
                 score = sum(1 for t in terms if t in hay)
                 if score:
