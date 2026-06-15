@@ -318,16 +318,48 @@ def _json_candidate(text: str) -> str | None:
 def parse_model_tool_call(text: str) -> dict | None:
     candidate = _json_candidate(text)
     if not candidate:
+        cmds = extract_shell_commands(text, limit=1)
+        if cmds:
+            return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
     try:
         data = json.loads(candidate)
     except Exception:
+        cmds = extract_shell_commands(text, limit=1)
+        if cmds:
+            return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
     tool = (data.get("tool") or "").strip().lower()
     args = data.get("args") or {}
     if tool not in {"shell", "read", "search", "write", "append"} or not isinstance(args, dict):
+        cmds = extract_shell_commands(text, limit=1)
+        if cmds:
+            return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
     return {"tool": tool, "args": args}
+
+
+def extract_shell_commands(text: str, limit: int = 8) -> list[str]:
+    """Recover safe shell commands from models that ignore the JSON tool protocol.
+
+    Some providers emit fenced bash blocks as a "plan". Jarvis should execute safe commands
+    through its tool layer instead of showing the plan to the owner as if it were an answer.
+    """
+    out: list[str] = []
+    for _lang, body in re.findall(r"```(bash|sh|shell)?\s*([\s\S]*?)```", text or "", flags=re.IGNORECASE):
+        for raw in body.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("$"):
+                line = line[1:].strip()
+            if shell_safety_error(line):
+                continue
+            if line not in out:
+                out.append(line)
+            if len(out) >= limit:
+                return out
+    return out
 
 
 def run_model_tool(call: dict, owner_text: str) -> dict:

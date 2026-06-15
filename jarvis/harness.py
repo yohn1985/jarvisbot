@@ -195,6 +195,36 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
     return "\n\n".join(evidence)
 
 
+def repair_unexecuted_command_plan(llm, latest: str, answer_text: str, thinking_text: str = "",
+                                   status=None) -> str:
+    """If a model dumps bash commands instead of using tools, execute the safe plan and summarize."""
+    combined = "\n\n".join(x for x in (answer_text, thinking_text) if x)
+    commands = chat_tools.extract_shell_commands(combined, limit=8)
+    if not commands:
+        return ""
+    evidence = []
+    for cmd in commands:
+        if status:
+            try:
+                status(f"executing recovered shell command: {cmd[:90]}")
+            except Exception:
+                pass
+        result = chat_tools.run_shell(cmd, timeout=20)
+        evidence.append(chat_tools.format_result(result))
+    ev = "\n\n".join(evidence)
+    prompt = (
+        "The model produced shell commands instead of a final answer. Jarvis executed the safe commands below.\n"
+        "Give a concise, outcome-focused answer to the owner from this evidence. Do not include command blocks unless needed.\n\n"
+        f"Owner message:\n{latest}\n\n"
+        f"Executed evidence:\n{ev}\n"
+    )
+    try:
+        out = llm.run("orchestrator", prompt, timeout=80).strip()
+        return out or ev
+    except Exception:
+        return ev
+
+
 def _json_object(text: str) -> dict | None:
     raw = (text or "").strip()
     match = re.search(r"\{.*\}", raw, re.S)

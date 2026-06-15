@@ -720,6 +720,12 @@ def _chat_reply(conv):
                 full = f"(couldn't reach my brain: {str(e2)[:120]})"
         if st.cancelled:
             full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
+        repair = harness.repair_unexecuted_command_plan(
+            llm, last, full or buf["t"], buf["th"], status=status_note
+        )
+        if repair:
+            full = repair
+            buf["t"] = repair
         try:
             status_note("reflecting and updating memory if needed...")
             harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
