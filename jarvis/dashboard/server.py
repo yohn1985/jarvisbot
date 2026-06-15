@@ -457,7 +457,12 @@ def _run_slash(conv, text):
     skills = {s.get("name"): s for s in _skills()}
     if name in ("", "help", "skills", "?"):
         listing = "\n".join(f"  /{n}" for n in sorted(skills)) or "  (none installed)"
-        messaging.reply(f"Skills you can run with `/`:\n{listing}\n\nExample: `/web is ubuntu 26 out`", conv=conv)
+        try:
+            from jarvis import chat_tools
+            builtins = chat_tools.BUILTIN_HELP
+        except Exception:
+            builtins = "/shell <command>\n/read <path>\n/search <text> [path]"
+        messaging.reply(f"Built-in tools:\n{builtins}\n\nSkills you can run with `/`:\n{listing}\n\nExample: `/web is ubuntu 26 out`", conv=conv)
         return
     if name not in skills:
         messaging.reply(f"No skill `/{name}`. Try `/help`. Available: " + ", ".join("/" + n for n in sorted(skills)), conv=conv)
@@ -560,6 +565,33 @@ def _stream_close(conv):
     threading.Thread(target=_later, daemon=True).start()
 
 
+def _finish_chat_text(conv, text, st=None):
+    """Persist a complete non-LLM answer and close the live SSE stream."""
+    from jarvis import messaging
+    msg = text or "(no output)"
+    mid = messaging.stream_start(conv)
+    messaging.stream_end(mid, msg)
+    st = st or _STREAMS.get(conv)
+    if st:
+        st.emit("text", msg)
+        st.emit("done", msg)
+        _stream_close(conv)
+
+
+def _run_builtin_tool(conv, text, st=None):
+    """Run Jarvis's primitive built-in chat tools. Returns True when handled."""
+    try:
+        from jarvis import chat_tools
+        result = chat_tools.parse_slash(text) if text.strip().startswith("/") else chat_tools.maybe_direct(text)
+        if result is None:
+            return False
+        _finish_chat_text(conv, chat_tools.format_result(result), st)
+        return True
+    except Exception as e:
+        _finish_chat_text(conv, f"(tool failed: {str(e)[:200]})", st)
+        return True
+
+
 def _chat_reply(conv):
     """Generate Jarvis's reply to the latest owner message in a conversation, via the brain.
     Runs in a background thread so /api/say returns instantly; tokens push live over SSE and the
@@ -574,11 +606,13 @@ def _chat_reply(conv):
                          if m.get("from") == "owner" and m.get("kind") in ("message", "note")), None)
         last = (last_msg or {}).get("text", "")
         img_paths = _msg_image_paths(last_msg)    # attached images -> shown to the vision model
+        st = _STREAMS.get(conv) or _stream_open(conv)   # reuse the stream /api/say pre-opened (so the
+        if _run_builtin_tool(conv, last.strip(), st):
+            return
         if last.strip().startswith("/"):          # chat slash-command -> run a skill directly
             _run_slash(conv, last.strip())
             return
         import time
-        st = _STREAMS.get(conv) or _stream_open(conv)   # reuse the stream /api/say pre-opened (so the
         full = ""                                       # browser's EventSource attaches instantly)
         llm = build_llm(cfg)
         if not llm:
@@ -600,9 +634,10 @@ def _chat_reply(conv):
                 + (f"\n\nLocal documentation evidence:\n{local_docs}\n" if local_docs else "")
                 + ("\n\nThe owner gave you documentation path(s) that were durably remembered: "
                    + ", ".join(remembered_roots) + "\n" if remembered_roots else "")
-                + "\n\nYou do not have implicit shell access in ordinary chat. Do not claim you ran "
-                  "commands, scanned files, indexed folders, or remembered facts unless a slash-skill "
-                  "output, local documentation evidence, or durable memory in this prompt proves it. "
+                + "\n\nSome explicit owner requests are handled by built-in tools before the model is "
+                  "called. In this model turn, do not claim you ran commands, scanned files, indexed "
+                  "folders, or remembered facts unless a tool or slash-skill output, local documentation "
+                  "evidence, or durable memory in this prompt proves it. "
                   "If the owner expects you to know something and the evidence is missing, say you need "
                   "to document the gap and create a learning record.\n"
                 + f"\nConversation so far:\n{transcript}\n")

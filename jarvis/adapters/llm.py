@@ -3,11 +3,14 @@ Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prom
 {prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
 falls through to `fallbacks`. Stdlib only."""
 from __future__ import annotations
-import json, os, shutil, subprocess, urllib.request
+import json, os, shutil, subprocess, tempfile, urllib.request
+from pathlib import Path
 
 DEFAULT_BACKENDS = {
     "claude": ["claude", "-p", "--model", "{model}"],
-    "codex":  ["codex", "exec", "--model", "{model}", "{prompt}"],
+    "codex":  ["codex", "exec", "--model", "{model}", "--cd", "{workspace}",
+               "--sandbox", "danger-full-access", "-c", "approval_policy=\"never\"",
+               "--skip-git-repo-check"],
     "ollama": ["ollama", "run", "{model}", "{prompt}"],
 }
 
@@ -61,12 +64,20 @@ class RoutingLLM:
         spec = self.backends[backend]
         if isinstance(spec, dict) and spec.get("http"):
             return self._invoke_http(spec, model, prompt, timeout, params)
-        cmd = [a.replace("{model}", model) for a in spec]
+        workspace = os.environ.get("JARVIS_CODEX_CWD") or "/home/yohn/projects/work"
+        if not Path(workspace).exists():
+            workspace = os.getcwd()
+        cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
         effort, thinking = params.get("effort"), params.get("thinking")
         if backend == "claude" and thinking in _THINK_KEYWORD:      # claude CLI: extended thinking via keyword
             prompt = prompt + _THINK_KEYWORD[thinking]
         if backend == "codex" and effort and effort != "default":   # codex CLI: reasoning-effort config override
             cmd = cmd[:2] + ["-c", f"model_reasoning_effort={effort}"] + cmd[2:]
+        final_path = None
+        if backend == "codex":
+            fd, final_path = tempfile.mkstemp(prefix="jarvis-codex-final-", suffix=".txt")
+            os.close(fd)
+            cmd += ["--output-last-message", final_path]
         stdin = None
         if any("{prompt}" in a for a in cmd):
             cmd = [a.replace("{prompt}", prompt) for a in cmd]
@@ -75,6 +86,16 @@ class RoutingLLM:
         p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout or "nonzero").strip()[:200])
+        if final_path:
+            try:
+                final = Path(final_path).read_text().strip()
+                if final:
+                    return final
+            finally:
+                try:
+                    os.unlink(final_path)
+                except Exception:
+                    pass
         return p.stdout.strip()
 
     def _invoke_http(self, spec, model, prompt, timeout, params=None):
