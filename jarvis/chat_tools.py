@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import json
 import html
+import difflib
 from pathlib import Path
 
 
@@ -127,6 +128,7 @@ If you need local evidence or need to perform an explicitly requested file chang
 Rules:
 - Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
 - shell is read-only and blocks destructive or mutating commands.
+- Use write for new files or full-file generation. Use edit for existing-file changes when possible.
 - write/append/edit obey the configured mode: shadow blocks writes, assist requires explicit owner edit intent, autonomous allows local-safe writes.
 - If no tool is needed, reply exactly: NO_TOOL"""
 
@@ -294,11 +296,29 @@ def write_file(path: str, content: str, append: bool = False, owner_text: str = 
             return {"ok": False, "tool": "write", "path": str(p), "error": "protected path; use the repo/deploy path instead"}
         if not p.parent.exists():
             return {"ok": False, "tool": "write", "path": str(p), "error": "parent directory does not exist"}
+        existed = p.exists() and p.is_file()
+        before = p.read_text(errors="replace") if existed else ""
         if append:
             with p.open("a") as f:
                 f.write(content)
         else:
             p.write_text(content)
+        after = p.read_text(errors="replace") if p.exists() and p.is_file() else content
+        if append:
+            return {"ok": True, "tool": "write", "path": str(p), "output": "appended to file"}
+        if existed and before != content:
+            before_context, after_context = _rewrite_context(before, after)
+            return {
+                "ok": True,
+                "tool": "write",
+                "path": str(p),
+                "output": "updated file",
+                "changed_existing": True,
+                "old": before_context,
+                "new": after_context,
+                "before_context": before_context,
+                "after_context": after_context,
+            }
         return {"ok": True, "tool": "write", "path": str(p), "output": "wrote file"}
     except Exception as e:
         return {"ok": False, "tool": "write", "path": raw, "error": str(e)[:300]}
@@ -368,6 +388,36 @@ def _edit_context(text: str, needle: str, radius: int = 260) -> str:
     prefix = "...\\n" if start else ""
     suffix = "\\n..." if end < len(text) else ""
     return prefix + text[start:end] + suffix
+
+
+def _rewrite_context(before: str, after: str, max_lines: int = 18) -> tuple[str, str]:
+    """Return compact before/after snippets for a full-file rewrite.
+
+    Some models update an existing file through the write tool instead of the edit tool.
+    The UI still needs an edit card, so show the changed hunk rather than the whole file.
+    """
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    matcher = difflib.SequenceMatcher(a=before_lines, b=after_lines, autojunk=False)
+    groups = matcher.get_grouped_opcodes(n=3)
+    try:
+        group = next(groups)
+    except StopIteration:
+        return before[:2000], after[:2000]
+    a_start = max(0, min(op[1] for op in group))
+    a_end = min(len(before_lines), max(op[2] for op in group))
+    b_start = max(0, min(op[3] for op in group))
+    b_end = min(len(after_lines), max(op[4] for op in group))
+    old_chunk = before_lines[a_start:a_end][:max_lines]
+    new_chunk = after_lines[b_start:b_end][:max_lines]
+    old_prefix = ["..."] if a_start else []
+    old_suffix = ["..."] if a_end < len(before_lines) else []
+    new_prefix = ["..."] if b_start else []
+    new_suffix = ["..."] if b_end < len(after_lines) else []
+    return (
+        "\n".join(old_prefix + old_chunk + old_suffix)[:2000],
+        "\n".join(new_prefix + new_chunk + new_suffix)[:2000],
+    )
 
 
 def parse_model_tool_call(text: str) -> dict | None:
@@ -524,6 +574,15 @@ def format_result(result: dict) -> str:
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "write":
         if result.get("ok"):
+            if result.get("changed_existing"):
+                marker = {
+                    "path": result.get("path"),
+                    "old": str(result.get("old") or "")[:1200],
+                    "new": str(result.get("new") or "")[:1200],
+                    "before": str(result.get("before_context") or result.get("old") or "")[:2000],
+                    "after": str(result.get("after_context") or result.get("new") or "")[:2000],
+                }
+                return f"{result.get('output')}: {result.get('path')}\nJARVIS_EDIT {json.dumps(marker, sort_keys=True)}"
             return f"{result.get('output')}: {result.get('path')}"
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "edit":

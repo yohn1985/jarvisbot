@@ -40,6 +40,11 @@ def _messages(base: str, token: str, conv: str):
 
 
 def _ask(base: str, token: str, conv: str, text: str, timeout: int = 180) -> str:
+    msg = _ask_message(base, token, conv, text, timeout=timeout)
+    return (msg.get("text") if msg else "") or ""
+
+
+def _ask_message(base: str, token: str, conv: str, text: str, timeout: int = 180) -> dict:
     _send(base, token, conv, text)
     deadline = time.time() + timeout
     last = []
@@ -49,7 +54,7 @@ def _ask(base: str, token: str, conv: str, text: str, timeout: int = 180) -> str
         if not any(m.get("streaming") for m in last):
             break
     replies = [m for m in last if m.get("from") == "jarvis"]
-    return (replies[-1].get("text") if replies else "") or ""
+    return replies[-1] if replies else {}
 
 
 def _case(name: str, ok: bool, detail: str) -> dict:
@@ -103,6 +108,32 @@ def run(base: str, token: str) -> dict:
         f"ANSWER:\n{answer}\n\nFILE:\n{current}",
     ))
 
+    code_path = Path(f"/tmp/jarvis-selftest-real-code-{ts}.py")
+    code_path.write_text(_sample_python_module(), encoding="utf-8")
+    conv = f"selftest-real-code-edit-{ts}"
+    msg = _ask_message(
+        base,
+        token,
+        conv,
+        (
+            f"Edit the real Python code in {code_path}. Change calculate_priority so tasks older "
+            "than 48 hours get 25 extra urgency points, keep the rest of the module intact, "
+            "then tell me what changed."
+        ),
+        timeout=240,
+    )
+    current = code_path.read_text(encoding="utf-8", errors="replace")
+    text = (msg.get("text") or "")
+    thinking = (msg.get("thinking") or "")
+    cases.append(_case(
+        "real Python code edit emits visible edit marker",
+        "age_hours > 48" in current
+        and ("25" in current or "0.25" in current)
+        and "JARVIS_EDIT" in thinking
+        and "calculate_priority" in text,
+        f"ANSWER:\n{text}\n\nTHINKING_HAS_MARKER:{'JARVIS_EDIT' in thinking}\n\nSNIP:\n{current[current.find('def calculate_priority'):current.find('def calculate_priority') + 900]}",
+    ))
+
     report = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": all(c["ok"] for c in cases), "cases": cases}
     _write_report(report)
     return report
@@ -117,6 +148,44 @@ def _write_report(report: dict) -> None:
     for case in report["cases"]:
         lines += [f"## {'PASS' if case['ok'] else 'FAIL'}: {case['name']}", "", "```text", case["detail"], "```", ""]
     (out / "SELF_TRAINING_LAST_RUN.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+
+def _sample_python_module() -> str:
+    lines = [
+        '"""Sample module used by Jarvis self-training real-code edit drills."""',
+        "",
+        "from __future__ import annotations",
+        "",
+        "MAX_PRIORITY = 100.0",
+        "DEFAULT_SCORE_WEIGHT = 0.7",
+        "DEFAULT_AGE_WEIGHT = 0.3",
+        "",
+        "class TaskRecord:",
+        "    def __init__(self, task_id: str, score: float, age_hours: float) -> None:",
+        "        self.task_id = task_id",
+        "        self.score = score",
+        "        self.age_hours = age_hours",
+        "",
+        "def clamp(value: float, low: float, high: float) -> float:",
+        "    return max(low, min(value, high))",
+        "",
+        "def calculate_priority(score: float, age_hours: float) -> float:",
+        "    norm_score = clamp(score, 0.0, 100.0) / 100.0",
+        "    age_factor = clamp(age_hours / 168.0, 0.0, 1.0)",
+        "    urgency = (DEFAULT_SCORE_WEIGHT * norm_score) + (DEFAULT_AGE_WEIGHT * age_factor)",
+        "    return MAX_PRIORITY * (1.0 - clamp(urgency, 0.0, 1.0))",
+        "",
+        "def rank_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:",
+        "    return sorted(tasks, key=lambda task: calculate_priority(task.score, task.age_hours))",
+        "",
+    ]
+    for idx in range(1, 100):
+        lines.extend([
+            f"def helper_{idx}(value: float) -> float:",
+            f"    return value + {idx}.0",
+            "",
+        ])
+    return "\n".join(lines)
 
 
 def main() -> int:
