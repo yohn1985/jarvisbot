@@ -19,6 +19,7 @@ KNOW_DIR = ROOT / "workspace" / "knowledge"
 DOC_ROOTS = KNOW_DIR / "doc-roots.json"
 DOC_INDEX = KNOW_DIR / "local-docs-index.json"
 LEARNING_DEBT = KNOW_DIR / "learning-debt.jsonl"
+QUESTIONS = KNOW_DIR / "questions.json"
 
 MAX_ROOTS = 40
 MAX_FILES = 700
@@ -284,6 +285,35 @@ def record_learning_gap(question: str, answer: str = "", reason: str = "unknown"
     }
     with LEARNING_DEBT.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+    queue_learning_question(question, reason)
+
+
+def queue_learning_question(question: str, reason: str = "missing-local-knowledge") -> bool:
+    """Feed owner-discovered gaps into the existing curiosity queue."""
+    q = (question or "").strip()
+    if len(q) < 8:
+        return False
+    queue = _read_json(QUESTIONS, [])
+    if not isinstance(queue, list):
+        queue = []
+    wanted = _terms(q)
+    for item in queue:
+        if not isinstance(item, dict):
+            continue
+        existing = _terms(str(item.get("q") or ""))
+        if wanted and existing and len(wanted & existing) >= max(2, min(len(wanted), len(existing)) // 2):
+            return False
+    queue.append({
+        "id": f"owner-{int(time.time())}",
+        "q": q,
+        "answered": False,
+        "answer": None,
+        "source": "owner-chat",
+        "reason": reason,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+    _write_json(QUESTIONS, queue)
+    return True
 
 
 def maybe_record_learning_gap(owner_text: str, reply_text: str, had_context: bool) -> None:
