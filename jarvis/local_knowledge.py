@@ -318,6 +318,22 @@ def _retrieve_learning_gaps(query: str, limit: int = 4) -> str:
 def record_learning_gap(question: str, answer: str = "", reason: str = "unknown") -> None:
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
     LEARNING_GAPS_DIR.mkdir(parents=True, exist_ok=True)
+    wanted = _terms(question)
+    try:
+        if LEARNING_DEBT.exists():
+            for line in LEARNING_DEBT.read_text(encoding="utf-8").splitlines()[-200:]:
+                if not line.strip():
+                    continue
+                existing_row = json.loads(line)
+                existing = _terms(str(existing_row.get("question") or ""))
+                if question.strip().lower() == str(existing_row.get("question") or "").strip().lower():
+                    queue_learning_question(question, reason)
+                    return
+                if wanted and existing and len(wanted & existing) >= max(3, min(len(wanted), len(existing)) // 2):
+                    queue_learning_question(question, reason)
+                    return
+    except Exception:
+        pass
     row = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "question": (question or "")[:1000],
