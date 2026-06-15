@@ -145,22 +145,37 @@ def _compact_prior_thinking(thinking: str, limit: int = 2200) -> str:
     """Carry forward prior-turn operating evidence without dumping every thought token."""
     if not thinking:
         return ""
-    lines = []
+    status_lines = []
+    marker_lines = []
+    evidence_lines = []
     capture = False
     for raw in thinking.splitlines():
         line = raw.strip()
         if not line:
             continue
         if line.startswith("Harness:"):
-            lines.append(line)
+            status_lines.append(line)
             capture = line.startswith("Harness: tool evidence")
             continue
+        if line.startswith("JARVIS_EDIT "):
+            marker_lines.append(line)
+            continue
         if line.startswith("$ ") or line.startswith("/") or line.startswith("CODE:") or line.startswith("SOURCE:"):
-            lines.append(line)
+            evidence_lines.append(line)
             continue
         if capture:
-            lines.append(line[:500])
-    return "\n".join(lines)[-limit:]
+            evidence_lines.append(line[:500])
+    markers = []
+    seen = set()
+    for line in marker_lines:
+        if line not in seen:
+            markers.append(line)
+            seen.add(line)
+    prefix = status_lines[-8:] + markers
+    prefix_text = "\n".join(prefix)
+    remaining = max(0, limit - len(prefix_text) - 2)
+    tail_text = "\n".join(evidence_lines)[-remaining:] if remaining else ""
+    return "\n".join(x for x in (prefix_text, tail_text) if x)[-limit:]
 
 
 def compact_evidence(text: str, limit: int = 4500) -> str:
