@@ -226,7 +226,7 @@ def format_result(result: dict) -> str:
         return f"{result.get('path')}\n(error: {result.get('error')})"
     if tool == "search":
         if result.get("ok"):
-        return result.get("output") or "(no matches)"
+            return result.get("output") or "(no matches)"
         return f"(search failed: {result.get('error')})"
     if tool == "codex":
         if result.get("ok"):
