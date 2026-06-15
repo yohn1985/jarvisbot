@@ -37,7 +37,9 @@ _DANGEROUS = re.compile(
     r")(\s|$)",
     re.IGNORECASE,
 )
-_WRITE_MARKERS = re.compile(r"(^|[^<])>(?!>)|>>|\b(curl|wget)\b.*\|\s*(sh|bash|python)", re.IGNORECASE)
+_REDIRECT = re.compile(r"(^|[^<])(\d?>|&>|>>)")
+_SAFE_DEVNULL_REDIRECT = re.compile(r"^\s*(2>|2>>|&>)\s*/dev/null\b")
+_PIPE_TO_SHELL = re.compile(r"\b(curl|wget)\b.*\|\s*(sh|bash|python)", re.IGNORECASE)
 _EDIT_INTENT = re.compile(
     r"\b(fix|change|edit|update|write|append|create|add|implement|patch|save|document|remember)\b",
     re.IGNORECASE,
@@ -91,8 +93,12 @@ def shell_safety_error(cmd: str) -> str | None:
         return "command is too long"
     if "\n" in cmd:
         return "multi-line shell commands are not allowed in chat tools"
-    if _DANGEROUS.search(cmd) or _WRITE_MARKERS.search(cmd):
+    if _DANGEROUS.search(cmd) or _PIPE_TO_SHELL.search(cmd):
         return "blocked because this chat shell tool is read-only; use a deliberate deploy/edit path for changes"
+    for m in _REDIRECT.finditer(cmd):
+        frag = cmd[m.start(2):]
+        if not _SAFE_DEVNULL_REDIRECT.match(frag):
+            return "blocked because shell redirection can write files; use /write or a deliberate edit path"
     return None
 
 
