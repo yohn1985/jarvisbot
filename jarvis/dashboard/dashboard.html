@@ -138,7 +138,10 @@
   .braindetail code{ background:#0c100c; padding:1px 5px; border-radius:3px; }
   #knowledge{ padding:0; overflow:hidden; height:100%; }
   .kwrap{ display:flex; height:100%; }
-  .kdocs{ width:230px; min-width:230px; border-right:1px solid var(--line); overflow-y:auto; padding:12px 8px; display:flex; flex-direction:column; gap:3px; }
+  .kdocs{ width:250px; min-width:250px; border-right:1px solid var(--line); overflow-y:auto; padding:12px 8px; display:flex; flex-direction:column; gap:3px; }
+  .kgroup{ display:flex; align-items:center; justify-content:space-between; width:100%; background:none; border:none; color:var(--grntxt); font:inherit; font-size:10px; letter-spacing:1px; padding:10px 9px 3px; opacity:.9; cursor:pointer; text-align:left; }
+  .kgroup:hover{ opacity:1; }
+  .kcount{ color:var(--dim); font-size:10px; letter-spacing:0; }
   .kdoc{ text-align:left; background:none; border:none; color:var(--dim); padding:7px 9px; border-radius:6px; cursor:pointer; font:inherit; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .kdoc:hover{ background:#0f140e; } .kdoc.on{ background:#10241a; color:var(--txt); }
   .kbody{ flex:1; overflow-y:auto; padding:18px 28px; }
@@ -240,6 +243,7 @@ function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>'
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0, _defaultSystemPrompt='';
 let _kwSig='', _cfgSig='', _chatSig='', _skSig='', _mdSig='', modelDraft={};
+let knowledgeCollapsed=(()=>{ try{return JSON.parse(localStorage.getItem('jarvisKnowledgeCollapsed')||'{}')}catch(e){return{}} })();
 function renderModels(list){
   const el=document.getElementById('set-models');
   const sig=JSON.stringify((list||[]).map(m=>[m.id,m.connected,m.is_main]));
@@ -358,16 +362,41 @@ function toggleThought(id){ const b=document.getElementById('th-'+id); if(!b)ret
   const open=body.hidden; body.hidden=!open; chev.textContent=open?'▴':'▾'; }
 function selectDoc(i){ knowledgeSel=i; _kwSig=''; renderKnowledge(knowledgeDocs); }
 function selectDocByName(n){ const i=knowledgeDocs.findIndex(d=>d.name===n); if(i>=0) selectDoc(i); }
+function knowledgeGroupName(name){
+  if((name||'').startsWith('memory/')) return 'MEMORIES';
+  if((name||'').startsWith('gap/')) return 'LEARNING GAPS';
+  if((name||'').startsWith('docs/')) return 'DOCUMENTATION';
+  return 'DISCOVERY';
+}
+function defaultKnowledgeCollapsed(group){ return group==='MEMORIES'||group==='LEARNING GAPS'; }
+function isKnowledgeCollapsed(group){ return Object.prototype.hasOwnProperty.call(knowledgeCollapsed,group)?!!knowledgeCollapsed[group]:defaultKnowledgeCollapsed(group); }
+function toggleKnowledgeGroup(group){
+  knowledgeCollapsed[group]=!isKnowledgeCollapsed(group);
+  try{ localStorage.setItem('jarvisKnowledgeCollapsed',JSON.stringify(knowledgeCollapsed)); }catch(e){}
+  _kwSig=''; renderKnowledge(knowledgeDocs);
+}
 function renderKnowledge(docs){
   knowledgeDocs=docs||[]; const el=document.getElementById('knowledge');
-  const sig=JSON.stringify(knowledgeDocs.map(d=>d.name))+':'+knowledgeSel;
+  const sig=JSON.stringify(knowledgeDocs.map(d=>d.name))+':'+knowledgeSel+':'+JSON.stringify(knowledgeCollapsed);
   if(sig===_kwSig) return; _kwSig=sig;   // don't rebuild (reset scroll) when nothing changed
   if(!knowledgeDocs.length){ el.innerHTML='<div class="kwrap"><div class="empty" style="padding:24px">Jarvis hasn\'t explored yet — it writes here as it discovers its world.</div></div>'; return; }
   if(knowledgeSel>=knowledgeDocs.length) knowledgeSel=0;
-  // sidebar shows only important docs (INDEX + per-host discovery); answered-question notes stay
-  // reachable via links inside INDEX, but don't clutter the rail.
-  const list=knowledgeDocs.map((d,i)=>({d,i})).filter(x=>x.d.primary!==false)
-    .map(({d,i})=>'<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>').join('');
+  const primary=knowledgeDocs.map((d,i)=>({d,i})).filter(x=>x.d.primary!==false);
+  const groups={};
+  for(const item of primary){ const g=knowledgeGroupName(item.d.name); (groups[g]||(groups[g]=[])).push(item); }
+  const order=['DISCOVERY','DOCUMENTATION','MEMORIES','LEARNING GAPS'];
+  let list='';
+  for(const group of order.filter(g=>groups[g]&&groups[g].length)){
+    const hasSelected=groups[group].some(x=>x.i===knowledgeSel);
+    const closed=isKnowledgeCollapsed(group)&&!hasSelected;
+    const chev=closed?'▸':'▾';
+    list+='<button type="button" class="kgroup" onclick="toggleKnowledgeGroup(\''+group+'\')"><span>'+chev+' '+group+'</span><span class="kcount">'+groups[group].length+'</span></button>';
+    if(!closed){
+      for(const {d,i} of groups[group]){
+        list+='<button type="button" class="kdoc'+(i===knowledgeSel?' on':'')+'" onclick="selectDoc('+i+')">'+esc(d.name)+'</button>';
+      }
+    }
+  }
   el.innerHTML='<div class="kwrap"><div class="kdocs">'+list+'</div><div class="kbody">'+md(knowledgeDocs[knowledgeSel].content)+'</div></div>';
 }
 const JARVIS_ART = [

@@ -358,7 +358,55 @@ def _discovery():
             out.append({"name": label, "content": p.read_text(), "primary": primary or p.name == "INDEX.md"})
         except Exception:
             pass
+    known_docs = _known_documentation_item()
+    if known_docs:
+        insert_at = 1 if out and out[0].get("name") == "INDEX.md" else 0
+        out.insert(insert_at, known_docs)
     return out[:60]
+
+
+def _known_documentation_item():
+    """Expose Jarvis's indexed documentation roots as a real Knowledge card.
+
+    Chat grounding and the Knowledge sidebar are separate plumbing. The harness may
+    already be using local docs as context, but the UI should also show what doc
+    roots/files Jarvis currently knows about.
+    """
+    try:
+        from jarvis import local_knowledge
+
+        cfg = (_config().get("config") or {})
+        index = local_knowledge.refresh_index(cfg)
+        roots = [str(x) for x in index.get("roots", []) if str(x).strip()]
+        files = list(index.get("files", []) or [])
+        if not roots and not files:
+            return None
+
+        lines = [
+            "# Known documentation",
+            "",
+            "Jarvis indexes these local documentation roots and uses matching snippets from them while answering.",
+            "",
+            "## Roots",
+            "",
+        ]
+        if roots:
+            lines += [f"- `{r}`" for r in roots[:40]]
+        else:
+            lines.append("- No documentation roots recorded yet.")
+
+        lines += ["", "## Indexed files", ""]
+        for item in files[:120]:
+            title = str(item.get("title") or item.get("name") or "document").strip()
+            path = str(item.get("path") or "").strip()
+            if path:
+                lines.append(f"- **{title}**: `{path}`")
+        if len(files) > 120:
+            lines.append(f"- ...and {len(files) - 120} more indexed files.")
+
+        return {"name": "docs/KNOWN_DOCUMENTATION.md", "content": "\n".join(lines).strip() + "\n", "primary": True}
+    except Exception:
+        return None
 
 
 def _env_context(limit=4000):
