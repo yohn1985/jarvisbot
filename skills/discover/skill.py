@@ -305,9 +305,18 @@ SUGGEST_MARKER = ROOT / "state" / "suggest.json"
 
 
 def _knowledge_sig():
-    docs = len(list(DISC_DIR.glob("*.md"))) if DISC_DIR.exists() else 0
-    notes = len(list(KNOW_DIR.glob("*.md"))) if KNOW_DIR.exists() else 0
-    return f"{docs}:{notes}"
+    # Include each file's mtime+size, not just COUNTS — discovery rewrites one doc per host IN PLACE,
+    # so a count-only signature never changes on re-learn and suggest() would stop proposing work.
+    parts = []
+    for d in (DISC_DIR, KNOW_DIR):
+        if d.exists():
+            for p in sorted(d.glob("*.md")):
+                try:
+                    st = p.stat()
+                    parts.append(f"{p.name}:{int(st.st_mtime)}:{st.st_size}")
+                except Exception:
+                    pass
+    return "|".join(parts)
 
 
 def suggest(llm, force=False):

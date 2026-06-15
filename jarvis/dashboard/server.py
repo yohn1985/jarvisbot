@@ -141,7 +141,17 @@ def _pools(refresh=False):
     llm = load().get("llm") or {}
     backends = dict(DEFAULT_BACKENDS)
     backends.update(llm.get("backends") or {})
-    pools = [{"name": n, "models": _detect_models(n, s)} for n, s in backends.items()]
+
+    def _caps(n, s):
+        # Reasoning capability comes from the backend KIND, not a model-name guess (so DeepSeek via
+        # the OpenAI-style ollama_cloud HTTP backend correctly offers 'effort'). thinking = Anthropic.
+        if n in ("claude", "anthropic") or (isinstance(s, dict) and s.get("format") == "anthropic"):
+            return {"effort": False, "thinking": True}
+        if n in ("codex", "openai", "ollama_cloud") or (isinstance(s, dict) and s.get("http")):
+            return {"effort": True, "thinking": False}
+        return {"effort": False, "thinking": False}
+
+    pools = [{"name": n, "models": _detect_models(n, s), "caps": _caps(n, s)} for n, s in backends.items()]
     data = {"pools": pools, "aliases": llm.get("aliases") or {}}
     _POOLS_CACHE.update(ts=time.time(), data=data)
     return data
@@ -250,6 +260,7 @@ def _procs():
 
 
 _SKILL_INSTALLING = set()
+_SKILL_ERRORS = {}        # name -> last install error (so a failed install is VISIBLE, not silent)
 
 
 def _skills():
@@ -263,7 +274,9 @@ def _skills():
             req = Path(s.get("dir", "")) / "requirements.txt"
             has = installer._has_real_reqs(req)
             sat = (not has) or (installer._skill_satisfied(req, installed_pkgs) if installed_pkgs is not None else False)
-            out.append({**s, "has_deps": has, "installed": sat, "installing": s.get("name") in _SKILL_INSTALLING})
+            out.append({**s, "has_deps": has, "installed": sat,
+                        "installing": s.get("name") in _SKILL_INSTALLING,
+                        "install_error": _SKILL_ERRORS.get(s.get("name"))})
         return out
     except Exception:
         return []
@@ -274,13 +287,16 @@ def _install_skill(name):
     if not name or name in _SKILL_INSTALLING:
         return {"started": False}
     _SKILL_INSTALLING.add(name)
+    _SKILL_ERRORS.pop(name, None)
 
     def _run():
         try:
-            subprocess.run([str(ROOT / "install.sh"), "skill", "install", name],
-                           capture_output=True, text=True, timeout=300)
-        except Exception:
-            pass
+            p = subprocess.run([str(ROOT / "install.sh"), "skill", "install", name],
+                               capture_output=True, text=True, timeout=300)
+            if p.returncode != 0:            # capture the failure instead of swallowing it
+                _SKILL_ERRORS[name] = ((p.stderr or p.stdout or "install failed").strip()[-300:])
+        except Exception as e:
+            _SKILL_ERRORS[name] = str(e)[:300]
         finally:
             _SKILL_INSTALLING.discard(name)
 
@@ -528,10 +544,15 @@ def _chat_reply(conv):
         if last.strip().startswith("/"):          # chat slash-command -> run a skill directly
             _run_slash(conv, last.strip())
             return
+        import time
+        st = _STREAMS.get(conv) or _stream_open(conv)   # reuse the stream /api/say pre-opened (so the
+        full = ""                                       # browser's EventSource attaches instantly)
         llm = build_llm(cfg)
         if not llm:
+            nb = "(No AI brain is connected yet — open the Models tab to connect one.)"
+            m0 = messaging.stream_start(conv); messaging.stream_end(m0, nb)
+            st.emit("text", nb); st.emit("done", nb); _stream_close(conv)
             return
-        import time
         transcript = "\n".join(("Owner: " if m.get("from") == "owner" else "Jarvis: ") + (m.get("text") or "")
                                for m in msgs if m.get("kind") in ("message", "note", "answer", "question"))
         ident = cfg.get("identity") or {}
@@ -550,6 +571,7 @@ def _chat_reply(conv):
                  "2024", "2025", "2026", "http", "github", "docs", "weather", "who won", "stock")
         decide = "NO"
         if any(h in last.lower() for h in _hint):
+            st.emit("status", "checking whether I need the web…")   # show activity during the triage call
             try:
                 decide = llm.run("triage", base +
                     "\nDoes answering the latest owner message require CURRENT EXTERNAL web facts (software "
@@ -558,7 +580,6 @@ def _chat_reply(conv):
                     timeout=60).strip()
             except Exception:
                 decide = "NO"
-        st = _stream_open(conv)                       # live token push (SSE subscribers attach here)
         if decide.upper().startswith("SEARCH:"):
             query = decide.split(":", 1)[1].strip()[:160]
             st.emit("status", f"checking the web: {query}")
@@ -609,7 +630,15 @@ def _chat_reply(conv):
         except Exception:
             pass
     except Exception:
-        pass
+        # ALWAYS close the SSE even if we failed before the normal done — otherwise the browser's
+        # EventSource hangs until its own timeout and the reply looks frozen.
+        try:
+            s = _STREAMS.get(conv)
+            if s and not s.done:
+                s.emit("done", "")
+                _stream_close(conv)
+        except Exception:
+            pass
 
 
 def _set_main_brain(target):
@@ -1004,7 +1033,10 @@ class H(BaseHTTPRequestHandler):
                             break
                         time.sleep(0.1)
                 imgs = _save_uploads(body.get("images"))
-                messaging.say(body.get("text", ""), conv=conv, images=imgs)
+                text = body.get("text", "")
+                messaging.say(text, conv=conv, images=imgs)
+                if not text.strip().startswith("/"):     # open the SSE stream NOW (not deep in the thread)
+                    _stream_open(conv)                   # so the browser's EventSource attaches with no 6s gap
                 threading.Thread(target=_chat_reply, args=(conv,), daemon=True).start()
                 return self._send(200, json.dumps({"ok": True}))
             if u.path == "/api/stop":                    # interrupt the in-progress reply

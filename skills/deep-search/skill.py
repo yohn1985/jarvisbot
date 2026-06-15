@@ -66,6 +66,10 @@ def main():
     ap.add_argument("--leaves", type=int, default=4)
     a = ap.parse_args()
 
+    import shutil
+    if not shutil.which("rg"):               # preflight: without ripgrep the TRACE is empty and the
+        sys.exit("deep-search: ripgrep (rg) is not installed — the code trace would be empty and any "
+                 "answer baseless. Install it: sudo apt-get install -y ripgrep")
     cfg = load()
     llm = build_llm(cfg)
     if not llm:

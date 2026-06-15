@@ -92,9 +92,11 @@
   .thumb{ position:relative; display:inline-block; } .thumb img{ width:54px; height:54px; object-fit:cover; border-radius:8px; border:1px solid var(--line); display:block; }
   .thumb button{ position:absolute; top:-6px; right:-6px; background:var(--red); color:#fff; border:none; border-radius:50%; width:18px; height:18px; cursor:pointer; font-size:11px; line-height:1; padding:0; }
   .msgimg{ max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); display:block; margin:4px 0; }
-  .slashmenu{ position:absolute; bottom:100%; left:0; margin-bottom:6px; min-width:220px; background:var(--card,#0d1117); border:1px solid var(--line); border-radius:6px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.4); z-index:20; }
-  .slashitem{ padding:7px 12px; cursor:pointer; font-family:monospace; color:var(--grntxt,#7ee2a8); }
-  .slashitem:hover{ background:var(--grnpill,#13251b); }
+  .slashmenu{ position:absolute; bottom:100%; left:0; margin-bottom:6px; min-width:300px; max-width:560px; background:var(--panel,#11150f); border:1px solid var(--line); border-radius:8px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.4); z-index:20; }
+  .slashitem{ display:flex; gap:10px; align-items:baseline; padding:7px 12px; cursor:pointer; }
+  .slashitem .sn{ color:var(--grntxt,#7ee2a8); font-family:monospace; } .slashitem .sd{ color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .slashitem:hover, .slashitem.sel{ background:var(--grnpill,#13251b); }
+  .slashhint{ padding:7px 12px; color:var(--dim); font-size:12px; font-family:monospace; }
   .msg{ font-size:13px; }
   .msg.jarvis{ white-space:normal; }                         /* markdown body controls its own spacing */
   .mdbody div{ min-height:0; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
@@ -148,6 +150,7 @@
   .skwhen{ color:var(--dim); margin-top:6px; font-size:12px; }
   .skrun{ margin-top:8px; background:#0c100c; border:1px solid var(--line); border-radius:4px; padding:5px 8px; color:var(--grntxt); font-size:11px; display:inline-block; }
   .skok{ color:var(--grntxt); font-size:12px; }
+  .skerr{ color:#e88; font-size:11px; margin-top:8px; white-space:pre-wrap; font-family:monospace; }
   #models{ padding:0; overflow:hidden; height:100%; }
   #models .kbody{ height:100%; }
   #models .card{ max-width:640px; }
@@ -262,25 +265,26 @@ async function useMain(id){
 }
 function renderSkills(list){
   const el=document.getElementById('skills');
-  const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing]));
+  const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing,s.install_error]));
   if(sig===_skSig) return; _skSig=sig;
   if(!list||!list.length){ el.innerHTML='<div class="kbody"><div class="empty" style="padding:24px">No skills found.</div></div>'; return; }
   let h='<div class="kbody"><h2>Skills shipped with Jarvis</h2>';
   for(const s of list){
     let btn;
-    if(s.installed) btn='<span class="skok">✓ installed</span>';
-    else if(s.installing) btn='<button type="button" class="bigbtn" disabled>Installing…</button>';
-    else if(s.has_deps) btn='<button type="button" class="bigbtn" onclick="installSkill(\''+esc(s.name)+'\')">Install</button>';
+    if(s.installing) btn='<button type="button" class="bigbtn" disabled>Installing…</button>';
+    else if(s.installed) btn='<span class="skok">✓ installed</span>'+(s.install_error?'':'');
+    else if(s.has_deps) btn='<button type="button" class="bigbtn" onclick="installSkill(\''+esc(s.name)+'\')">'+(s.install_error?'Retry install':'Install')+'</button>';
     else btn='<span class="skok">ready (no deps)</span>';
+    const err=(!s.installing && s.install_error)?'<div class="skerr">✕ install failed: '+esc(s.install_error)+'</div>':'';
     h+='<div class="card"><h3>'+esc(s.name||'')+'</h3><div>'+esc(s.description||'')+'</div>'+
        (s.when_to_use?'<div class="skwhen"><b>When:</b> '+esc(s.when_to_use)+'</div>':'')+
-       '<div style="margin-top:10px">'+btn+'</div></div>';
+       '<div style="margin-top:10px">'+btn+'</div>'+err+'</div>';
   }
   el.innerHTML=h+'</div>';
 }
 async function installSkill(name){
   await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-  _skSig=''; load();
+  _skSig=''; _fastUntil=Date.now()+60000; load();   // poll while it installs so success/error shows
 }
 let _cbId=0;
 function codeBlockHTML(b){ const id='cb'+(_cbId++);
@@ -483,7 +487,7 @@ async function load(){
       const pools=poolNames.length?poolNames:[curPool];
       const psel=`<select id="cf-pool-${role}" onchange="onPoolChange('${role}')">`+pools.map(p=>`<option${p===curPool?' selected':''}>${esc(p)}</option>`).join('')+`</select>`;
       return row(role,`<div class="poolrow">${psel}${modelControl(role,curPool,curModel)}`+
-        `<span id="cf-reason-${role}" class="reason">${reasonControls(role,curModel,pr[role]||{})}</span></div>`);
+        `<span id="cf-reason-${role}" class="reason">${reasonControls(role,curPool,pr[role]||{})}</span></div>`);
     };
     const rtCard=card('LLM ROUTING (role → pool → model)',
       '<div style="margin-bottom:10px"><button type="button" class="ghostbtn" onclick="refreshPools()">↻ refresh models</button>'+
@@ -533,7 +537,7 @@ function renderBody(m){
   return inner;
 }
 function renderChat(msgs){
-  if(_sseActive) return;   // SSE owns the chat DOM while a live reply is streaming
+  if(_sseActive && activeConv===_sseConv) return;   // SSE owns the DOM only for the streaming conv
   msgs=msgs||[]; const cl=document.getElementById('chatlog'); if(!cl) return;
   const ids=msgs.map(m=>m.id).join(','); const streamMsg=msgs.find(m=>m.streaming);
   // SMOOTH: same message set, only the streamed reply growing -> patch just that node (no full rebuild)
@@ -604,14 +608,17 @@ async function say(){
     cl.insertAdjacentHTML('beforeend',`<div class="row orow"><div class="msg owner">${thumbs}${esc(v)}</div><div class="ts">${ts}</div></div>`);
     cl.scrollTop=cl.scrollHeight; }
   _pending=[]; renderAttach();
+  const isSlash=v.startsWith('/');
   await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v,conv,images:imgs})});
-  openStream(conv);   // steering: if a reply was mid-flight, the server interrupts it and this re-attaches
+  // Slash commands are mechanical skill runs (not a token stream) — they post status/output messages,
+  // so just poll fast and let renderChat show them. SSE is only for the model's streamed reply.
+  if(isSlash){ _fastUntil=Date.now()+30000; load(); } else { openStream(conv); }
 }
 // --- live reply over SSE (push, not poll) -------------------------------------------------------
-let _sse=null, _sseActive=false, _live={th:'',tx:'',status:''};
+let _sse=null, _sseActive=false, _sseConv=null, _live={th:'',tx:'',status:''};
 function openStream(conv){
   if(_sse){ try{_sse.close()}catch(e){} _sse=null; }
-  _live={th:'',tx:'',status:''}; _sseActive=true; setStop(true);
+  _live={th:'',tx:'',status:''}; _sseActive=true; _sseConv=conv; setStop(true);
   _sse=new EventSource('/api/chat-stream?conv='+encodeURIComponent(conv));
   _sse.addEventListener('set',e=>{const d=JSON.parse(e.data); _live.th=d.thinking||''; _live.tx=d.text||''; _live.status=d.status||''; renderLive();});
   _sse.addEventListener('status',e=>{ _live.status=JSON.parse(e.data).text||''; renderLive(); });
@@ -639,21 +646,33 @@ function setStop(on){ const b=document.getElementById('sendbtn'); if(!b) return;
   if(on){ b.innerHTML=_SVG_STOP; b.classList.add('stopping'); b.onclick=stopGen; b.title='Stop'; }
   else { b.innerHTML=_SVG_SEND; b.classList.remove('stopping'); b.onclick=say; b.title='Send'; } }
 // --- slash-command autocomplete: type "/" to run a shipped skill from chat ---
-let _slashSkills=null;
+let _slashSkills=null, _slashSel=0;
+const _SLASH_USAGE={web:'/web <question>','deep-search':'/deep-search <question>',
+  discover:'/discover   (scans this host + network; any extra text is ignored)',
+  'youtube-research':'/youtube-research <query>'};
 async function loadSlashSkills(){ if(_slashSkills) return _slashSkills;
-  try{ const r=await fetch('/api/skills'); const j=await r.json(); _slashSkills=(j.skills||j||[]).map(s=>s.name).filter(Boolean).sort(); }catch(e){ _slashSkills=[]; }
+  try{ const r=await fetch('/api/skills'); const j=await r.json(); _slashSkills=(j.skills||j||[]).filter(s=>s&&s.name); }catch(e){ _slashSkills=[]; }
   return _slashSkills; }
-function hideSlash(){ const m=document.getElementById('slashmenu'); if(m){ m.hidden=true; m.innerHTML=''; } }
+function hideSlash(){ const m=document.getElementById('slashmenu'); if(m){ m.hidden=true; m.innerHTML=''; } _slashSel=0; }
 async function onSayInput(){
   const el=document.getElementById('sayinput'), m=document.getElementById('slashmenu'); const v=el.value;
-  if(!v.startsWith('/') || v.includes(' ')){ hideSlash(); return; }
-  const q=v.slice(1).toLowerCase(); const names=await loadSlashSkills();
-  const hits=names.filter(n=>n.toLowerCase().startsWith(q));
+  if(!v.startsWith('/')){ hideSlash(); return; }
+  const skills=await loadSlashSkills(); const sp=v.indexOf(' ');
+  if(sp>=0){   // typing args -> keep a usage hint visible (don't vanish the moment you hit space)
+    const nm=v.slice(1,sp), sk=skills.find(s=>s.name===nm);
+    if(!sk){ hideSlash(); return; }
+    m.innerHTML='<div class="slashhint">'+esc(_SLASH_USAGE[nm]||('/'+nm+' <args>'))+(sk.description?'  —  '+esc(sk.description):'')+'</div>';
+    m.hidden=false; return;
+  }
+  const q=v.slice(1).toLowerCase(); const hits=skills.filter(s=>s.name.toLowerCase().startsWith(q));
   if(!hits.length){ hideSlash(); return; }
-  m.innerHTML=hits.map(n=>'<div class="slashitem" onclick="pickSlash(\''+n+'\')">/'+n+'</div>').join('');
+  if(_slashSel>=hits.length) _slashSel=0;
+  m.innerHTML=hits.map((s,i)=>'<div class="slashitem'+(i===_slashSel?' sel':'')+'" data-name="'+esc(s.name)+'" onclick="pickSlashEl(this)">'+
+    '<span class="sn">/'+esc(s.name)+'</span>'+(s.description?'<span class="sd">'+esc(s.description)+'</span>':'')+'</div>').join('');
   m.hidden=false;
 }
-function pickSlash(n){ const el=document.getElementById('sayinput'); el.value='/'+n+' '; hideSlash(); el.focus(); }
+function pickSlashEl(el){ pickSlash(el.getAttribute('data-name')); }
+function pickSlash(n){ const el=document.getElementById('sayinput'); el.value='/'+n+' '; hideSlash(); el.focus(); onSayInput(); }
 // --- editable CONFIG: override identity / action-classes / routing / priorities ---
 async function saveCfg(patch, msgId){
   const el=document.getElementById(msgId); if(el){ el.textContent='saving…'; el.style.color='var(--mut,#8aa)'; }
@@ -687,19 +706,19 @@ function onPoolChange(role){
   if(holder) holder.replaceWith(tmp.firstChild);
   refreshReason(role);
 }
-// reasoning controls — effort (gpt-5/o-series/codex) and thinking level (claude), only when supported
-function supportsEffort(m){ return /(^|[:_\-])(o3|o4|gpt-5)/i.test(m||'')||/codex/i.test(m||''); }
-function supportsThinking(m){ return /(claude|opus|sonnet|haiku)/i.test(m||''); }
+// reasoning controls — capability comes from the POOL/backend kind (server /api/pools caps), not a
+// model-name guess, so DeepSeek via the OpenAI-style ollama_cloud backend correctly offers 'effort'.
+function poolCaps(){ const m={}; if(_pools)(_pools.pools||[]).forEach(p=>m[p.name]=p.caps||{}); return m; }
 function rsel(id,label,val,opts){ return `<span class="rctl"><label>${label}</label><select id="${id}">`+opts.map(o=>`<option${o===(val||'default')?' selected':''}>${o}</option>`).join('')+`</select></span>`; }
-function reasonControls(role,model,rp){ rp=rp||{}; let h='';
-  if(supportsEffort(model)) h+=rsel('cf-effort-'+role,'effort',rp.effort,['default','minimal','low','medium','high']);
-  if(supportsThinking(model)) h+=rsel('cf-think-'+role,'thinking',rp.thinking,['default','low','medium','high']);
+function reasonControls(role,pool,rp){ rp=rp||{}; const c=poolCaps()[pool]||{}; let h='';
+  if(c.effort) h+=rsel('cf-effort-'+role,'effort',rp.effort,['default','minimal','low','medium','high']);
+  if(c.thinking) h+=rsel('cf-think-'+role,'thinking',rp.thinking,['default','low','medium','high']);
   return h; }
 function refreshReason(role){
-  const model=(document.getElementById('cf-model-'+role)||{}).value||'';
+  const pool=(document.getElementById('cf-pool-'+role)||{}).value||'';
   const e=document.getElementById('cf-effort-'+role), t=document.getElementById('cf-think-'+role);
   const holder=document.getElementById('cf-reason-'+role);
-  if(holder) holder.innerHTML=reasonControls(role,model,{effort:e&&e.value,thinking:t&&t.value});
+  if(holder) holder.innerHTML=reasonControls(role,pool,{effort:e&&e.value,thinking:t&&t.value});
 }
 function saveRouting(){ const r={}, params={};
   document.querySelectorAll('[id^="cf-pool-"]').forEach(e=>{ const role=e.id.slice(8); const m=document.getElementById('cf-model-'+role); const model=m?m.value.trim():''; if(model) r[role]=e.value+':'+model;
@@ -711,7 +730,11 @@ function autogrow(el){ if(!el)return; el.style.height='auto'; el.style.height=Ma
 function sayKey(e){
   const m=document.getElementById('slashmenu');
   if(m && !m.hidden){ const items=[...m.querySelectorAll('.slashitem')];
-    if(e.key==='Tab'||(e.key==='Enter'&&items.length===1)){ e.preventDefault(); items[0].click(); return; }
+    if(items.length){
+      if(e.key==='ArrowDown'){ e.preventDefault(); _slashSel=(_slashSel+1)%items.length; onSayInput(); return; }
+      if(e.key==='ArrowUp'){ e.preventDefault(); _slashSel=(_slashSel-1+items.length)%items.length; onSayInput(); return; }
+      if(e.key==='Tab'||e.key==='Enter'){ e.preventDefault(); items[Math.min(_slashSel,items.length-1)].click(); return; }
+    }
     if(e.key==='Escape'){ hideSlash(); return; } }
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); say(); }   // Enter sends, Shift+Enter newline
 }

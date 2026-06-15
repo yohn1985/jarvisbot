@@ -15,22 +15,33 @@ the mind's job, following SKILL.md.
 Scratch lives OUTSIDE any repo: /tmp/youtube_research
 """
 from __future__ import annotations
-import argparse, json, re, shutil, subprocess, sys
+import argparse, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 SCRATCH = Path("/tmp/youtube_research")
 
 
-def _need(tool: str):
-    if not shutil.which(tool):
-        sys.exit(f"{tool} not installed — run: ./install.sh skill install youtube-research")
+def _bin(tool: str):
+    """Resolve a tool from THIS interpreter's venv bin first, then PATH. Install puts yt-dlp in
+    .venv/bin, which isn't on PATH when the skill runs as `.venv/bin/python skill.py` — so a plain
+    which() wrongly reported it 'not installed' even after a successful install."""
+    cand = os.path.join(os.path.dirname(sys.executable), tool)
+    return cand if os.path.exists(cand) else shutil.which(tool)
+
+
+def _need(tool: str) -> str:
+    b = _bin(tool)
+    if not b:
+        sys.exit(f"{tool} not installed — open the Skills tab and click Install "
+                 f"(or run: ./install.sh skill install youtube-research)")
+    return b
 
 
 def search(query: str, n: int = 12) -> list[dict]:
     """Candidate videos for a cluster query (no API key). Capture id/title/channel/url."""
-    _need("yt-dlp")
+    ytdlp = _need("yt-dlp")
     proc = subprocess.run(
-        ["yt-dlp", f"ytsearch{n}:{query}", "--dump-json", "--flat-playlist", "--no-warnings"],
+        [ytdlp, f"ytsearch{n}:{query}", "--dump-json", "--flat-playlist", "--no-warnings"],
         capture_output=True, text=True,
     )
     out = []
@@ -49,11 +60,11 @@ def search(query: str, n: int = 12) -> list[dict]:
 
 def download(video_ids: list[str]) -> None:
     """Auto + manual English captions -> vtt in the scratch folder."""
-    _need("yt-dlp")
+    ytdlp = _need("yt-dlp")
     SCRATCH.mkdir(parents=True, exist_ok=True)
     for vid in video_ids:
         subprocess.run([
-            "yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs",
+            ytdlp, "--skip-download", "--write-subs", "--write-auto-subs",
             "--sub-lang", "en", "--convert-subs", "vtt",
             "-o", str(SCRATCH / "%(id)s.%(ext)s"),
             f"https://www.youtube.com/watch?v={vid}",
