@@ -245,7 +245,8 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
     if not likely_needs_tools(latest):
         return ""
     evidence = []
-    for call in planned_tool_calls(latest):
+    planned_calls = planned_tool_calls(latest)
+    for call in planned_calls:
         if status:
             try:
                 status(tool_status(call))
@@ -253,6 +254,8 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
                 pass
         result = chat_tools.run_model_tool(call, latest)
         evidence.append(chat_tools.format_result(result))
+    if any(call.get("tool") in ("write", "append", "edit") for call in planned_calls):
+        return "\n\n".join(evidence)
     for _ in range(chat_tools.MAX_TOOL_STEPS):
         prompt = (
             base
