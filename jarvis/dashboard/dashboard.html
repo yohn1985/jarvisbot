@@ -714,11 +714,9 @@ function poolMap(){ const m={}; if(_pools)(_pools.pools||[]).forEach(p=>m[p.name
 function modelControl(role,pool,curModel){
   const models=(poolMap()[pool]||[]).slice();
   if(curModel&&!models.includes(curModel)) models.unshift(curModel);
-  // editable: pick a detected model OR type any model the backend supports (catalogs are never
-  // complete — e.g. the codex CLI exposes no model list, so its set is only a known subset).
-  const dl='dl-'+role;
-  return `<input id="cf-model-${role}" list="${dl}" value="${esc(curModel)}" placeholder="model" oninput="refreshReason('${role}')"/>`+
-         `<datalist id="${dl}">`+models.map(m=>`<option value="${esc(m)}"></option>`).join('')+`</datalist>`;
+  return `<select id="cf-model-${role}" onchange="refreshReason('${role}')">`+
+         models.map(m=>`<option${m===curModel?' selected':''}>${esc(m)}</option>`).join('')+
+         `</select>`;
 }
 function onPoolChange(role){
   const pool=document.getElementById('cf-pool-'+role).value;
