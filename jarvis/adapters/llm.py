@@ -64,7 +64,7 @@ class RoutingLLM:
         spec = self.backends[backend]
         if isinstance(spec, dict) and spec.get("http"):
             return self._invoke_http(spec, model, prompt, timeout, params)
-        workspace = os.environ.get("JARVIS_CODEX_CWD") or "/home/yohn/projects/work"
+        workspace = os.environ.get("JARVIS_CODEX_CWD") or os.environ.get("JARVIS_WORKSPACE") or os.getcwd()
         if not Path(workspace).exists():
             workspace = os.getcwd()
         cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]

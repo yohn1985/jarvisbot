@@ -19,6 +19,8 @@ KNOW_DIR = ROOT / "workspace" / "knowledge"
 DOC_ROOTS = KNOW_DIR / "doc-roots.json"
 DOC_INDEX = KNOW_DIR / "local-docs-index.json"
 LEARNING_DEBT = KNOW_DIR / "learning-debt.jsonl"
+LEARNED = KNOW_DIR / "learned.jsonl"
+LEARNED_DIR = KNOW_DIR / "learned"
 QUESTIONS = KNOW_DIR / "questions.json"
 
 MAX_ROOTS = 40
@@ -104,13 +106,11 @@ def _default_roots() -> list[Path]:
         ROOT / "docs",
         ROOT / "workspace" / "discovery",
         ROOT / "workspace" / "knowledge",
-        Path("/home/yohn/projects/work/docs"),
-        Path("/home/yohn/projects/work/documentation"),
-        Path("/home/yohn/projects/work"),
     ]
-    projects = Path("/home/yohn/projects")
-    if projects.exists():
-        roots.extend(_discover_doc_roots(projects, max_depth=3))
+    for env in ("JARVIS_WORKSPACE", "JARVIS_CONTEXT_ROOT"):
+        raw = os.environ.get(env)
+        if raw:
+            roots.append(Path(raw).expanduser())
     return roots
 
 
@@ -286,6 +286,46 @@ def record_learning_gap(question: str, answer: str = "", reason: str = "unknown"
     with LEARNING_DEBT.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
     queue_learning_question(question, reason)
+
+
+def record_learned_memory(fact: str, source: str = "reflection", scope: str = "project",
+                          keywords: list[str] | None = None, evidence: str = "") -> bool:
+    """Persist a verified learned fact as both JSONL and an indexed markdown note."""
+    fact = (fact or "").strip()
+    if len(fact) < 8:
+        return False
+    KNOW_DIR.mkdir(parents=True, exist_ok=True)
+    LEARNED_DIR.mkdir(parents=True, exist_ok=True)
+    row = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "fact": fact[:2000],
+        "source": source[:80],
+        "scope": (scope or "project")[:40],
+        "keywords": [str(k)[:80] for k in (keywords or [])[:20]],
+        "evidence": (evidence or "")[:2000],
+    }
+    with LEARNED.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+    slug_terms = _terms(" ".join([fact, " ".join(row["keywords"])]))
+    slug = "-".join(sorted(slug_terms)[:8]) or f"learned-{int(time.time())}"
+    path = LEARNED_DIR / f"{int(time.time())}-{slug[:80]}.md"
+    body = [
+        "# Learned memory",
+        "",
+        f"- Scope: {row['scope']}",
+        f"- Source: {row['source']}",
+        f"- Learned at: {row['ts']}",
+        f"- Keywords: {', '.join(row['keywords'])}",
+        "",
+        "## Fact",
+        "",
+        row["fact"],
+    ]
+    if row["evidence"]:
+        body += ["", "## Evidence", "", row["evidence"]]
+    path.write_text("\n".join(body).strip() + "\n", encoding="utf-8")
+    refresh_index(force=True)
+    return True
 
 
 def queue_learning_question(question: str, reason: str = "missing-local-knowledge") -> bool:

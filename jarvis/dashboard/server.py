@@ -358,24 +358,6 @@ def _env_context(limit=4000):
     return docs[0]["content"][:limit] if docs else ""
 
 
-def _project_context(limit=18000):
-    """Codex tabs and codex CLI start by loading project instructions. Jarvis must do the same
-    deterministically instead of hoping the model decides to search for them."""
-    chunks = []
-    for p in (
-        Path("/home/yohn/projects/work/AGENTS.md"),
-        Path("/home/yohn/projects/work/CONTEXT.md"),
-        Path("/home/yohn/projects/work/docs/INDEX.md"),
-    ):
-        try:
-            if p.exists() and p.is_file():
-                chunks.append(f"### {p}\n{p.read_text(errors='replace')}")
-        except Exception:
-            pass
-    text = "\n\n".join(chunks)
-    return text[:limit]
-
-
 UPLOADS = ROOT / "state" / "uploads"
 _IMG_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
 
@@ -610,92 +592,6 @@ def _run_builtin_tool(conv, text, st=None):
         return True
 
 
-def _needs_local_tools(text):
-    low = (text or "").lower()
-    hints = (
-        "pipeline", "ticket", "status", "stuck", "service", "systemd", "timer", "journal",
-        "log", "uptime", "hostname", "disk", "memory", "network", "docs", "documentation",
-        "file", "folder", "repo", "branch", "commit", "deploy", "read", "search", "find",
-        "inspect", "check", "scan", "look at", "fix", "change", "edit", "update", "write",
-        "append", "create", "add", "implement", "patch", "remember", "document",
-    )
-    return any(h in low for h in hints)
-
-
-def _mandatory_grounding_evidence(latest):
-    """Deterministic grounding for ops/status/workspace questions.
-
-    This is the missing harness layer: some facts must be gathered by Jarvis itself before the
-    selected model gets a chance to ramble. It is intentionally generic and evidence-oriented, not
-    tied to one phrase or one pipeline.
-    """
-    try:
-        from jarvis import chat_tools
-    except Exception:
-        return ""
-    low = (latest or "").lower()
-    if not any(w in low for w in (
-        "status", "doing", "stuck", "pipeline", "ticket", "worker", "service", "timer",
-        "host", "network", "storage", "deploy", "monitoring", "repo", "docs", "documentation",
-    )):
-        return ""
-    commands = [
-        "hostname",
-        "hostname -I",
-        "findmnt -T /home/yohn/projects",
-    ]
-    if any(w in low for w in ("pipeline", "worker", "ticket", "stuck", "deploy", "timer", "service")):
-        commands += [
-            "systemctl list-timers --all 'agent-*' 'leedagent-*' 'ai-*' --no-pager | sed -n '1,120p'",
-            "systemctl list-units --type=service --all 'agent-*' 'leedagent-*' 'ai-*' --no-pager | sed -n '1,120p'",
-            "command -v agent-implementer >/dev/null && agent-implementer --summary || true",
-            "command -v agent-pr-reviewer >/dev/null && agent-pr-reviewer --dry-run --summary || true",
-            "command -v agent-approved-pr-deployer >/dev/null && agent-approved-pr-deployer --dry-run --max-prs 4 || true",
-            "command -v agent-rejected-pr-handler >/dev/null && agent-rejected-pr-handler --summary || true",
-            "command -v agent-deploy-queue >/dev/null && agent-deploy-queue --summary || true",
-        ]
-    evidence = []
-    for cmd in commands:
-        result = chat_tools.run_shell(cmd, timeout=20)
-        evidence.append(chat_tools.format_result(result))
-    return "\n\n".join(evidence)
-
-
-def _collect_tool_evidence(llm, base, latest, st=None):
-    """Provider-neutral tool loop. Any model can ask Jarvis to run a tool by emitting JSON."""
-    try:
-        from jarvis import chat_tools
-    except Exception:
-        return ""
-    if not _needs_local_tools(latest):
-        return ""
-    evidence = []
-    for step in range(chat_tools.MAX_TOOL_STEPS):
-        prompt = (
-            base
-            + "\n\n"
-            + chat_tools.TOOL_PROTOCOL
-            + ("\n\nTool evidence so far:\n" + "\n\n".join(evidence) if evidence else "")
-            + "\n\nLatest owner message:\n"
-            + latest
-            + "\n\nIf another tool is needed, return exactly one JSON tool request. If enough evidence is available, return exactly NO_TOOL."
-        )
-        try:
-            decision = llm.run("orchestrator", prompt, timeout=120).strip()
-        except Exception:
-            return "\n\n".join(evidence)
-        call = chat_tools.parse_model_tool_call(decision)
-        if not call:
-            break
-        if st:
-            st.emit("status", f"running {call.get('tool')} tool...")
-        result = chat_tools.run_model_tool(call, latest)
-        evidence.append(chat_tools.format_result(result))
-        if not result.get("ok") and call.get("tool") in ("write", "append"):
-            break
-    return "\n\n".join(evidence)
-
-
 def _chat_reply(conv):
     """Generate Jarvis's reply to the latest owner message in a conversation, via the brain.
     Runs in a background thread so /api/say returns instantly; tokens push live over SSE and the
@@ -724,29 +620,13 @@ def _chat_reply(conv):
             m0 = messaging.stream_start(conv); messaging.stream_end(m0, nb)
             st.emit("text", nb); st.emit("done", nb); _stream_close(conv)
             return
-        transcript = "\n".join(("Owner: " if m.get("from") == "owner" else "Jarvis: ") + (m.get("text") or "")
-                               for m in msgs if m.get("kind") in ("message", "note", "answer", "question"))
         ident = cfg.get("identity") or {}
         name = ident.get("name", "Jarvis")
-        from jarvis import persona
-        from jarvis import local_knowledge
+        from jarvis import harness
         env = _env_context()
-        project_ctx = _project_context()
-        remembered_roots = local_knowledge.remember_roots_from_text(last, cfg)
-        local_docs = local_knowledge.retrieve(last, cfg)
-        base = (persona.system(cfg) + " You're chatting with the owner in your dashboard."
-                + (f"\n\nProject operating instructions and shared context:\n{project_ctx}\n" if project_ctx else "")
-                + (f"\n\nWhat you've discovered about your environment:\n{env}\n" if env else "")
-                + (f"\n\nLocal documentation evidence:\n{local_docs}\n" if local_docs else "")
-                + ("\n\nThe owner gave you documentation path(s) that were durably remembered: "
-                   + ", ".join(remembered_roots) + "\n" if remembered_roots else "")
-                + "\n\nSome explicit owner requests are handled by built-in tools before the model is "
-                  "called. In this model turn, do not claim you ran commands, scanned files, indexed "
-                  "folders, or remembered facts unless a tool or slash-skill output, local documentation "
-                  "evidence, or durable memory in this prompt proves it. "
-                  "If the owner expects you to know something and the evidence is missing, say you need "
-                  "to document the gap and create a learning record.\n"
-                + f"\nConversation so far:\n{transcript}\n")
+        hctx = harness.build_context(cfg, msgs, last, env_context=env)
+        base = hctx["base"]
+        local_docs = hctx.get("local_docs", "")
         # 1) MULTI-TURN: a fast cheap-model decision on whether live web facts are needed; if so, post a
         #    visible status message and gather evidence before answering (Jarvis works out loud).
         web_ctx, used_web = "", False
@@ -774,8 +654,7 @@ def _chat_reply(conv):
                 web_ctx, used_web = (ans + (f"\n\nSOURCES:\n{src}" if src else "")), True
             except Exception:
                 web_ctx = ""
-        mandatory_ctx = _mandatory_grounding_evidence(last)
-        tool_ctx = _collect_tool_evidence(llm, base + (f"\n\nMANDATORY GROUNDING EVIDENCE:\n{mandatory_ctx}\n" if mandatory_ctx else ""), last, st)
+        tool_ctx = harness.collect_tool_evidence(llm, base, last, status=lambda text: st.emit("status", text))
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
         #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
         mid = messaging.stream_start(conv)
@@ -792,7 +671,6 @@ def _chat_reply(conv):
                 messaging.stream_update(mid, buf["t"], thinking=buf["th"]); buf["last"] = now
 
         prompt = (base + (f"\nLIVE WEB EVIDENCE:\n{web_ctx}\n" if web_ctx else "")
-                  + (f"\nMANDATORY GROUNDING EVIDENCE:\n{mandatory_ctx}\n" if mandatory_ctx else "")
                   + (f"\nLOCAL TOOL EVIDENCE:\n{tool_ctx}\n" if tool_ctx else "")
                   + ("\nThe owner attached image(s) below — examine them to answer." if img_paths else "")
                   + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
@@ -813,7 +691,7 @@ def _chat_reply(conv):
         st.emit("done", full)
         _stream_close(conv)
         try:
-            local_knowledge.maybe_record_learning_gap(last, full or buf["t"], bool(local_docs))
+            harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
         except Exception:
             pass
         try:

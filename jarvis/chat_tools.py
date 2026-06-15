@@ -14,9 +14,39 @@ import json
 from pathlib import Path
 
 
-DEFAULT_CWD = Path("/home/yohn/projects/work")
-if not DEFAULT_CWD.exists():
-    DEFAULT_CWD = Path.cwd()
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def default_cwd() -> Path:
+    candidates: list[Path] = []
+    for env_name in ("JARVIS_WORKSPACE", "JARVIS_CWD"):
+        raw = os.environ.get(env_name)
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    try:
+        import yaml
+        cfg = yaml.safe_load((ROOT / "config.yaml").read_text()) if (ROOT / "config.yaml").exists() else {}
+        workspace = ((cfg or {}).get("workspace") or {}).get("root")
+        if workspace:
+            candidates.append(Path(str(workspace)).expanduser())
+    except Exception:
+        pass
+    try:
+        from jarvis import local_knowledge
+        for root in local_knowledge.remembered_roots()[:6]:
+            candidates.append(root)
+            if root.name.lower() in {"docs", "documentation"}:
+                candidates.append(root.parent)
+    except Exception:
+        pass
+    candidates.append(Path.cwd())
+    for p in candidates:
+        try:
+            if p.exists() and p.is_dir():
+                return p.resolve()
+        except Exception:
+            continue
+    return Path.cwd()
 
 MAX_OUTPUT = 12000
 READ_LIMIT = 20000
@@ -61,10 +91,10 @@ _PROTECTED_WRITE_PREFIXES = (
 TOOL_PROTOCOL = """Local tools are available through Jarvis, independent of the selected model provider.
 If you need local evidence or need to perform an explicitly requested file change, reply with exactly one JSON object and no prose:
 {"tool":"shell","args":{"cmd":"uptime"}}
-{"tool":"read","args":{"path":"/home/yohn/projects/work/docs/INDEX.md"}}
-{"tool":"search","args":{"pattern":"pipeline","path":"/home/yohn/projects/work"}}
-{"tool":"write","args":{"path":"/home/yohn/projects/work/example.md","content":"text"}}
-{"tool":"append","args":{"path":"/home/yohn/projects/work/example.md","content":"text"}}
+{"tool":"read","args":{"path":"docs/INDEX.md"}}
+{"tool":"search","args":{"pattern":"pipeline","path":"."}}
+{"tool":"write","args":{"path":"example.md","content":"text"}}
+{"tool":"append","args":{"path":"example.md","content":"text"}}
 
 Rules:
 - Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
@@ -116,7 +146,7 @@ def run_shell(cmd: str, timeout: int = 30) -> dict:
             cmd,
             shell=True,
             executable="/bin/bash",
-            cwd=str(DEFAULT_CWD),
+            cwd=str(default_cwd()),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -151,7 +181,7 @@ def run_codex(task: str, timeout: int = 300) -> dict:
         p = subprocess.run(
             [
                 "codex", "exec",
-                "--cd", str(DEFAULT_CWD),
+                "--cd", str(default_cwd()),
                 "--sandbox", "danger-full-access",
                 "-c", 'approval_policy="never"',
                 "--skip-git-repo-check",
@@ -159,7 +189,7 @@ def run_codex(task: str, timeout: int = 300) -> dict:
                 "-",
             ],
             input=task,
-            cwd=str(DEFAULT_CWD),
+            cwd=str(default_cwd()),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -194,7 +224,7 @@ def read_file(path: str) -> dict:
     try:
         p = Path(raw).expanduser()
         if not p.is_absolute():
-            p = DEFAULT_CWD / p
+            p = default_cwd() / p
         if not p.exists() or not p.is_file():
             return {"ok": False, "tool": "read", "path": str(p), "error": "file not found"}
         data = p.read_text(errors="replace")
@@ -214,7 +244,7 @@ def write_file(path: str, content: str, append: bool = False) -> dict:
     try:
         p = Path(raw).expanduser()
         if not p.is_absolute():
-            p = DEFAULT_CWD / p
+            p = default_cwd() / p
         resolved = str(p.resolve())
         if any(resolved == x.rstrip("/") or resolved.startswith(x) for x in _PROTECTED_WRITE_PREFIXES):
             return {"ok": False, "tool": "write", "path": str(p), "error": "protected path; use the repo/deploy path instead"}
@@ -266,7 +296,7 @@ def run_model_tool(call: dict, owner_text: str) -> dict:
     if tool == "read":
         return read_file(str(args.get("path") or ""))
     if tool == "search":
-        return search(str(args.get("pattern") or ""), str(args.get("path") or DEFAULT_CWD))
+        return search(str(args.get("pattern") or ""), str(args.get("path") or default_cwd()))
     if tool in ("write", "append"):
         if not owner_allows_write(owner_text):
             return {"ok": False, "tool": "write", "error": "write/append requires explicit owner edit intent"}
@@ -278,9 +308,9 @@ def search(pattern: str, root: str | None = None) -> dict:
     pattern = (pattern or "").strip()
     if not pattern:
         return {"ok": False, "tool": "search", "error": "missing search pattern"}
-    base = Path(root or DEFAULT_CWD).expanduser()
+    base = Path(root or default_cwd()).expanduser()
     if not base.is_absolute():
-        base = DEFAULT_CWD / base
+        base = default_cwd() / base
     try:
         p = subprocess.run(
             ["rg", "-n", "--hidden", "--glob", "!**/.git/**", "--", pattern, str(base)],
