@@ -117,6 +117,7 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         + f"- Current tool mode: {chat_tools.mode_description()}.\n"
         + "- Do not claim you ran, scanned, read, indexed, remembered, deployed, or checked anything unless evidence in this prompt proves it.\n"
         + "- If evidence is missing, say what is missing and record the gap during reflection.\n"
+        + "- If relevant learning gaps are included, say this is a known unresolved gap and name the next evidence needed. Do not answer as if the gap was never recorded.\n"
         + f"\nConversation so far:\n{transcript}\n"
     )
     return {
@@ -137,6 +138,20 @@ def likely_needs_tools(text: str) -> bool:
         "fix", "change", "edit", "update", "write", "append", "create", "remember", "learn",
     )
     return any(h in low for h in hints)
+
+
+def fast_local_answer(latest: str, local_docs: str) -> str:
+    """Answer simple local-memory lookups without the full model loop."""
+    text = local_docs or ""
+    low = (latest or "").lower()
+    asks_memory = any(s in low for s in ("what do you know", "do you know", "are you aware", "what is", "what's"))
+    if asks_memory and "Learning gaps relevant to this question:" in text:
+        gap = re.search(r"GAP:\s*(.+?)(?:\nSTATUS:|\Z)", text, re.S)
+        reason = re.search(r"REASON:\s*(.+?)(?:\nRECORDED:|\Z)", text, re.S)
+        q = (gap.group(1).strip() if gap else latest.strip())
+        r = (reason.group(1).strip() if reason else "needs investigation")
+        return f"Known unresolved gap: {q}\n\nWhat I still need: {r}"
+    return ""
 
 
 def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:

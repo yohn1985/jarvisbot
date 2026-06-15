@@ -652,6 +652,14 @@ def _chat_reply(conv):
             status_note("grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
         else:
             status_note("grounded in operating prompt; no local context files found")
+        fast = harness.fast_local_answer(last, local_docs)
+        if fast:
+            status_note("answered from local memory without full tool loop")
+            messaging.stream_end(mid, fast, thinking=buf["th"])
+            st.emit("text", fast)
+            st.emit("done", fast)
+            _stream_close(conv)
+            return
         # 1) MULTI-TURN: a fast cheap-model decision on whether live web facts are needed; if so, post a
         #    visible status message and gather evidence before answering (Jarvis works out loud).
         web_ctx, used_web = "", False
