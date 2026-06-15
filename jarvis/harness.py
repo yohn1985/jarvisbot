@@ -222,11 +222,12 @@ def fast_local_answer(latest: str, local_docs: str) -> str:
         "do you remember", "what did you learn", "what have you learned",
         "learned memory", "your memory", "known gap", "learning gap",
     ))
+    direct_lookup = re.search(r"\b(what|who|where)\s+(?:is|are|was|were)\b", low) is not None
     knowledge_probe = any(s in low for s in ("do you know", "are you aware", "what do you know"))
     has_non_memory_evidence = any(s in text for s in (
         "SOURCE:", "Code index hits relevant to this question:", "Operational index hits relevant to this question:",
     ))
-    asks_memory = explicit_recall or (knowledge_probe and not has_non_memory_evidence)
+    asks_memory = explicit_recall or ((knowledge_probe or direct_lookup) and not has_non_memory_evidence)
     if asks_memory and "Learned memories relevant to this question:" in text:
         mem = re.search(r"MEMORY:\s*(.+?)(?:\nSCOPE:|\Z)", text, re.S)
         if mem:
