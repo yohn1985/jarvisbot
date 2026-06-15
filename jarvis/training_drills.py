@@ -7,6 +7,7 @@ else wired into Jarvis. The goal is to catch harness/tool/memory regressions.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import time
 import urllib.parse
@@ -123,15 +124,23 @@ def run(base: str, token: str) -> dict:
         timeout=240,
     )
     current = code_path.read_text(encoding="utf-8", errors="replace")
+    priority_before_48, priority_after_48 = _load_priority_values(code_path)
     text = (msg.get("text") or "")
     thinking = (msg.get("thinking") or "")
     cases.append(_case(
         "real Python code edit emits visible edit marker",
         "age_hours > 48" in current
         and ("25" in current or "0.25" in current)
+        and priority_after_48 >= priority_before_48 + 20.0
         and "JARVIS_EDIT" in thinking
         and "calculate_priority" in text,
-        f"ANSWER:\n{text}\n\nTHINKING_HAS_MARKER:{'JARVIS_EDIT' in thinking}\n\nSNIP:\n{current[current.find('def calculate_priority'):current.find('def calculate_priority') + 900]}",
+        (
+            f"ANSWER:\n{text}\n\n"
+            f"THINKING_HAS_MARKER:{'JARVIS_EDIT' in thinking}\n"
+            f"PRIORITY_47H:{priority_before_48}\n"
+            f"PRIORITY_49H:{priority_after_48}\n\n"
+            f"SNIP:\n{current[current.find('def calculate_priority'):current.find('def calculate_priority') + 900]}"
+        ),
     ))
 
     report = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": all(c["ok"] for c in cases), "cases": cases}
@@ -173,7 +182,7 @@ def _sample_python_module() -> str:
         "    norm_score = clamp(score, 0.0, 100.0) / 100.0",
         "    age_factor = clamp(age_hours / 168.0, 0.0, 1.0)",
         "    urgency = (DEFAULT_SCORE_WEIGHT * norm_score) + (DEFAULT_AGE_WEIGHT * age_factor)",
-        "    return MAX_PRIORITY * (1.0 - clamp(urgency, 0.0, 1.0))",
+        "    return MAX_PRIORITY * clamp(urgency, 0.0, 1.0)",
         "",
         "def rank_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:",
         "    return sorted(tasks, key=lambda task: calculate_priority(task.score, task.age_hours))",
@@ -186,6 +195,18 @@ def _sample_python_module() -> str:
             "",
         ])
     return "\n".join(lines)
+
+
+def _load_priority_values(path: Path) -> tuple[float, float]:
+    spec = importlib.util.spec_from_file_location(f"jarvis_selftest_{path.stem}", path)
+    if not spec or not spec.loader:
+        return 0.0, 0.0
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return (
+        float(module.calculate_priority(10.0, 47.0)),
+        float(module.calculate_priority(10.0, 49.0)),
+    )
 
 
 def main() -> int:
