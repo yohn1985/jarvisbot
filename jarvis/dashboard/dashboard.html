@@ -109,10 +109,10 @@
   .mdbody div{ min-height:0; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
   .mdbody ul{ margin:4px 0; padding-left:20px; } .mdbody code{ background:#0c140d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:12px; }
   .mdbody a.mdlink{ color:var(--grntxt); cursor:pointer; text-decoration:underline; }
-  .codeblk{ border:1px solid var(--line); border-radius:6px; margin:8px 0; overflow:hidden; background:#0a0e0a; }
-  .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px; background:#0e140e; border-bottom:1px solid var(--line); }
-  .codelang{ color:var(--dim); font-size:11px; letter-spacing:1px; } .copybtn{ background:none; border:1px solid var(--line); color:var(--dim); font-size:10px; padding:1px 8px; border-radius:3px; cursor:pointer; }
-  .copybtn:hover{ color:var(--grntxt); } .codeblk pre{ margin:0; padding:10px 12px; overflow-x:auto; } .codeblk code{ color:#d8e6d4; font-size:12.5px; white-space:pre; }
+  .codeblk{ margin:7px 0 10px; overflow:hidden; background:transparent; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px 3px; background:transparent; }
+  .codelang{ color:var(--dim); font-size:10px; letter-spacing:0; } .copybtn{ background:none; border:1px solid rgba(255,255,255,.08); color:var(--dim); font-size:10px; padding:1px 7px; border-radius:3px; cursor:pointer; }
+  .copybtn:hover{ color:var(--txt); border-color:var(--line); } .codeblk pre{ margin:0; padding:8px 12px 10px; overflow-x:auto; background:#0a0f0b; } .codeblk code{ color:#c8d6c4; font-size:12px; white-space:pre; line-height:1.45; }
   .thought{ margin:2px 0 8px; } .thtoggle{ display:inline-flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:2px 0; color:var(--dim); }
   .thdot{ width:8px; height:8px; border-radius:50%; background:var(--dim); display:inline-block; } .thlbl{ font-size:12px; color:var(--dim); } .thchev{ font-size:11px; color:var(--dim); }
   .thbody{ margin:6px 0 0 4px; padding-left:10px; border-left:2px solid var(--line); max-height:280px; overflow-y:auto; }
@@ -429,7 +429,7 @@ function editCardsFromThinking(thinking){
     const m=raw.match(/^\s*JARVIS_EDIT\s+(\{.*\})\s*$/);
     if(m){ try{ const c=JSON.parse(m[1]); const key=JSON.stringify([c.path,c.before||c.old,c.after||c.new]); if(!seen.has(key)){ seen.add(key); cards.push(c); } }catch(e){} }
   }
-  return cards.map((c,i)=>editCardHTML(c,i,true)).join('');
+  return cards.map((c,i)=>editCardHTML(c,i,false)).join('');
 }
 function editCardHTML(c,i,collapsed){
   const id='editcard-'+i+'-'+Math.random().toString(36).slice(2,8);
@@ -688,7 +688,7 @@ function renderBody(m){
     const evidence=m.evidence||thinking;
     const edits=!m.streaming?editCardsFromThinking(evidence):'';
     const shownThought=visibleThinking(thinking);
-    const activity=(m.streaming&&!shownThought)?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Thinking...')}</span></div>`:'';
+    const activity=(m.streaming&&!shownThought)?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Working...')}</span></div>`:'';
     const visible=(bodyText||'').trim();
     body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
          (m.streaming?'<span class="cursor">▌</span>':'');
@@ -724,7 +724,7 @@ function renderChat(msgs){
   }
   const lastm=msgs[msgs.length-1];
   if(lastm && lastm.from==='owner' && (lastm.kind==='message'||lastm.kind==='note')){
-    cl.insertAdjacentHTML('beforeend','<div class="row jrow"><div class="turnhead">Jarvis</div><div class="msg jarvis"><div class="thinking-live"><span class="thdot pulse"></span>Thinking…</div></div></div>');
+    cl.insertAdjacentHTML('beforeend','<div class="row jrow"><div class="turnhead">Jarvis</div><div class="msg jarvis"><div class="thinking-live"><span class="thdot pulse"></span>Starting…</div></div></div>');
   }
   renderSetupCard(cl);
   cl.querySelectorAll('.thought .thbody:not([hidden])').forEach(b=>{ b.scrollTop=b.scrollHeight; });
