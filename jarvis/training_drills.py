@@ -92,6 +92,17 @@ def run(base: str, token: str) -> dict:
         f"FIRST:\n{first}\n\nSECOND:\n{second}",
     ))
 
+    path = Path(f"/tmp/jarvis-selftest-edit-{ts}.txt")
+    path.write_text("before-value\n", encoding="utf-8")
+    conv = f"selftest-edit-{ts}"
+    answer = _ask(base, token, conv, f"Edit {path} replacing before-value with after-value, then tell me whether it worked.")
+    current = path.read_text(encoding="utf-8", errors="replace")
+    cases.append(_case(
+        "safe edit tool reports successful mutation",
+        current.strip() == "after-value" and "after-value" in answer and "failed" not in answer.lower(),
+        f"ANSWER:\n{answer}\n\nFILE:\n{current}",
+    ))
+
     report = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": all(c["ok"] for c in cases), "cases": cases}
     _write_report(report)
     return report
