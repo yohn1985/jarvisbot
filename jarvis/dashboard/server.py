@@ -786,7 +786,7 @@ def _chat_reply(conv):
         if st.cancelled:
             full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
         repair = harness.repair_unexecuted_command_plan(
-            llm, last, full or buf["t"], buf["th"], status=status_note
+            llm, last, full or buf["t"], "" if tool_ctx else buf["th"], status=status_note
         )
         if repair:
             full = repair
