@@ -888,6 +888,8 @@ case "${1:-scaffold}" in
   rollback) "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import rollback;print('rolled back' if rollback('${2:-}') else 'failed')";;
   skill)    shift; skill_cmd "$@";;
   dashboard) shift; "$(pybin)" "$ROOT/jarvis/dashboard/server.py" "$@";;
+  url|login) printf '\n  Open Jarvis (this link includes your access token — keep it private):\n\n    \033[36m%s\033[0m\n\n' "$(dash_url)";;  # re-print the login link any time
+  token)    cat "$ROOT/state/dashboard_token" 2>/dev/null || die "no token yet — run ./install.sh up";;
   doctor)   doctor;;
-  *) die "unknown subcommand '$1' (scaffold|deps|initdb|up|down|breathe|doctor)";;
+  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|dashboard|doctor)";;
 esac

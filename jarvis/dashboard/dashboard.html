@@ -46,6 +46,12 @@
   .badge{ background:var(--red); color:#fff; border-radius:9px; padding:0 6px; font-size:10px; margin-left:4px; }
   [hidden]{ display:none !important; }
   main{ height:calc(100vh - 96px); padding:0; }
+  #activity, #settings, #knowledge{ height:100%; overflow-y:auto; }
+  .page{ max-width:1000px; margin:0 auto; padding:22px 26px 60px; }
+  .seth{ color:var(--grntxt); font-size:14px; letter-spacing:1px; font-weight:600; margin:30px 0 4px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+  .page > .seth:first-child{ margin-top:6px; }
+  .setdesc{ color:var(--dim); font-size:12px; margin:0 0 14px; }
+  .muted{ color:var(--dim); font-weight:400; font-size:12px; }
   #chat{ display:flex; flex-direction:row; height:100%; }
   .convs{ width:240px; min-width:240px; border-right:1px solid var(--line); display:flex; flex-direction:column; padding:12px 10px; gap:3px; overflow-y:auto; }
   .newchat{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:10px; letter-spacing:1px; }
@@ -151,33 +157,24 @@
   .skrun{ margin-top:8px; background:#0c100c; border:1px solid var(--line); border-radius:4px; padding:5px 8px; color:var(--grntxt); font-size:11px; display:inline-block; }
   .skok{ color:var(--grntxt); font-size:12px; }
   .skerr{ color:#e88; font-size:11px; margin-top:8px; white-space:pre-wrap; font-family:monospace; }
-  #models{ padding:0; overflow:hidden; height:100%; }
-  #models .kbody{ height:100%; }
-  #models .card{ max-width:640px; }
+  .beta{ background:var(--amber); color:#1a1206; font-size:9px; font-weight:700; letter-spacing:1.5px; padding:2px 6px; border-radius:4px; vertical-align:middle; margin-left:8px; }
+  #set-models .card, #set-routing .card, #set-behavior .card, #set-skills .card{ max-width:none; }
 </style>
 </head>
 <body>
 <header>
-  <div class="title">● JARVIS</div>
+  <div class="title">● JARVIS <span class="beta">EARLY BETA</span></div>
   <div class="meta"><span id="procs">0 procs</span> · mode <span id="mode">—</span> · updated <span id="upd">—</span>
      <button type="button" class="refresh" onclick="load()">refresh</button></div>
 </header>
 <nav>
   <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
   <button type="button" id="tab-knowledge" onclick="show('knowledge')">KNOWLEDGE</button>
-  <button type="button" id="tab-skills" onclick="show('skills')">SKILLS</button>
-  <button type="button" id="tab-models" onclick="show('models')">MODELS</button>
-  <button type="button" id="tab-runs" onclick="show('runs')">RUNS</button>
-  <button type="button" id="tab-config" onclick="show('config')">CONFIG</button>
-  <button type="button" id="tab-procs" onclick="show('procview')">PROCESSES</button>
+  <button type="button" id="tab-activity" onclick="show('activity')">ACTIVITY</button>
+  <button type="button" id="tab-settings" onclick="show('settings')">SETTINGS</button>
 </nav>
 <main>
-  <section id="runs">
-    <table><thead><tr><th>TIME</th><th>MODE</th><th>POOL</th><th>MODEL</th><th>STATUS</th><th>DURATION</th><th>TARGET</th></tr></thead>
-    <tbody id="runs-body"></tbody></table>
-    <div id="runs-empty" class="empty" hidden>No runs yet — run <code>./install.sh breathe</code>.</div>
-  </section>
-  <section id="chat" hidden>
+  <section id="chat">
     <aside class="convs">
       <button type="button" class="newchat" onclick="newChat()">+ New chat</button>
       <div class="conv-h">CONVERSATIONS</div>
@@ -204,31 +201,50 @@
     </div>
   </section>
   <section id="knowledge" hidden></section>
-  <section id="skills" hidden></section>
-  <section id="models" hidden></section>
-  <section id="config" hidden></section>
-  <section id="procview" hidden>
-    <table><thead><tr><th>PID</th><th>UPTIME</th><th>COMMAND</th><th></th></tr></thead>
-    <tbody id="procs-body"></tbody></table>
-    <div id="procs-empty" class="empty" hidden>No live Jarvis processes.</div>
+  <section id="activity" hidden>
+    <div class="page">
+      <h2 class="seth">Recent activity</h2>
+      <div class="setdesc">Kernel ticks and spawned workers (the swarm), newest first.</div>
+      <table><thead><tr><th>TIME</th><th>MODE</th><th>POOL</th><th>MODEL</th><th>STATUS</th><th>DURATION</th><th>TARGET</th></tr></thead>
+      <tbody id="runs-body"></tbody></table>
+      <div id="runs-empty" class="empty" hidden>No runs yet — run <code>./install.sh breathe</code>.</div>
+      <h2 class="seth" style="margin-top:26px">Live processes</h2>
+      <div class="setdesc">Jarvis processes running right now.</div>
+      <table><thead><tr><th>PID</th><th>UPTIME</th><th>COMMAND</th><th></th></tr></thead>
+      <tbody id="procs-body"></tbody></table>
+      <div id="procs-empty" class="empty" hidden>No live Jarvis processes.</div>
+    </div>
+  </section>
+  <section id="settings" hidden>
+    <div class="page">
+      <h2 class="seth">Brain &amp; Models</h2>
+      <div class="setdesc">Connect a brain, then route each role to a model (effort/thinking where supported).</div>
+      <div id="set-models"></div>
+      <div id="set-routing"></div>
+      <h2 class="seth">Behavior</h2>
+      <div class="setdesc">Who Jarvis is and what it may do on its own.</div>
+      <div id="set-behavior"></div>
+      <h2 class="seth">Skills</h2>
+      <div class="setdesc">Shipped capabilities — install their dependencies with one click.</div>
+      <div id="set-skills"></div>
+    </div>
   </section>
 </main>
 <script>
 function show(id){
-  for(const s of ['runs','chat','knowledge','skills','models','config','procview']){ document.getElementById(s).hidden = (s!==id); }
+  for(const s of ['chat','knowledge','activity','settings']){ const el=document.getElementById(s); if(el) el.hidden=(s!==id); }
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
-  document.getElementById('tab-'+(id==='procview'?'procs':id)).classList.add('active');
+  const t=document.getElementById('tab-'+id); if(t) t.classList.add('active');
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0;
 let _kwSig='', _cfgSig='', _chatSig='', _skSig='', _mdSig='', modelDraft={};
 function renderModels(list){
-  const el=document.getElementById('models');
+  const el=document.getElementById('set-models');
   const sig=JSON.stringify((list||[]).map(m=>[m.id,m.connected,m.is_main]));
   if(sig===_mdSig) return; _mdSig=sig;
-  let h='<div class="kbody"><h2>Models — Jarvis’s brains</h2>'+
-    '<p>Main brain = deep reasoning. Agents = cheap models for spawned work. Subscription login is cheapest; API keys are pay-per-use.</p>';
+  let h='<div class="setdesc">Main brain = deep reasoning. Agents = cheap models for spawned work. Subscription login is cheapest; API keys are pay-per-use.</div>';
   let section='';
   for(const m of (list||[])){
     if(m.section!==section){ section=m.section; h+='<h3 style="margin:18px 0 4px;color:var(--grntxt);letter-spacing:1px">'+esc(section)+'</h3>'; }
@@ -251,7 +267,7 @@ function renderModels(list){
     }
     h+='</div>';
   }
-  el.innerHTML=h+'</div>';
+  el.innerHTML=h;
 }
 async function connectModel(id){
   const el=document.getElementById('md-'+id); const v=(el?el.value:modelDraft[id]||'').trim();
@@ -264,11 +280,11 @@ async function useMain(id){
   _mdSig=''; load();
 }
 function renderSkills(list){
-  const el=document.getElementById('skills');
+  const el=document.getElementById('set-skills');
   const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing,s.install_error]));
   if(sig===_skSig) return; _skSig=sig;
-  if(!list||!list.length){ el.innerHTML='<div class="kbody"><div class="empty" style="padding:24px">No skills found.</div></div>'; return; }
-  let h='<div class="kbody"><h2>Skills shipped with Jarvis</h2>';
+  if(!list||!list.length){ el.innerHTML='<div class="empty">No skills found.</div>'; return; }
+  let h='';
   for(const s of list){
     let btn;
     if(s.installing) btn='<button type="button" class="bigbtn" disabled>Installing…</button>';
@@ -280,7 +296,7 @@ function renderSkills(list){
        (s.when_to_use?'<div class="skwhen"><b>When:</b> '+esc(s.when_to_use)+'</div>':'')+
        '<div style="margin-top:10px">'+btn+'</div>'+err+'</div>';
   }
-  el.innerHTML=h+'</div>';
+  el.innerHTML=h;
 }
 async function installSkill(name){
   await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
@@ -451,18 +467,16 @@ async function load(){
      `<td><span class="pill">${r.mode||''}</span></td><td>${r.pool||''}</td><td>${r.model||''}</td>`+
      `<td><span class="dot"></span>${r.status||''}</td><td>${r.duration??'—'}</td><td>${r.target||''}</td></tr>`);
   }
-  // config
+  // config (Settings page)
   const c=(cfg.config)||{}; const idn=c.identity||{};
-  document.getElementById('mode').textContent=idn.mode||'—';
-  document.getElementById('mode').className='mode-'+(idn.mode||'');
+  const md=document.getElementById('mode'); if(md){ md.textContent=idn.mode||'—'; md.className='mode-'+(idn.mode||''); }
   const orch=((c.llm||{}).routing||{}).orchestrator||'';
   const cm=document.getElementById('chip-model'); if(cm) cm.textContent=(orch.split(':')[1]||orch||'brain');
   const cmo=document.getElementById('chip-mode'); if(cmo) cmo.textContent=idn.mode||'shadow';
   const csig=JSON.stringify(cfg.config||{});
   // Re-render only when the server config changed AND the owner isn't mid-edit (don't wipe typing).
-  if(csig!==_cfgSig && !(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#config'))){
+  if(csig!==_cfgSig && !(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#settings'))){
     _cfgSig=csig;
-    const cs=document.getElementById('config');
     const card=(title,inner,onsave)=>`<div class="card"><h3>${title}</h3>${inner}`+
       (onsave?`<div style="margin-top:10px"><button type="button" class="bigbtn" onclick="${onsave}">Save</button> <span class="cfgmsg" id="msg-${onsave.replace(/[^a-z]/gi,'')}"></span></div>`:'')+`</div>`;
     const txt=(id,v)=>`<input id="${id}" value="${esc(v??'')}"/>`;
@@ -498,7 +512,10 @@ async function load(){
 
     const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
        `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
-    cs.innerHTML = idCard + acCard + rtCard + prCard
+    // Brain & Models section gets the routing card (below the connect cards); Behavior gets the rest.
+    const rEl=document.getElementById('set-routing'); if(rEl) rEl.innerHTML=rtCard;
+    const bEl=document.getElementById('set-behavior');
+    if(bEl) bEl.innerHTML = idCard + acCard + prCard
       + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
   }
   // procs

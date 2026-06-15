@@ -45,11 +45,15 @@ LOGIN_HTML = """<!doctype html><html><head><meta charset=utf-8><title>Jarvis</ti
 body{background:#0c0f0d;color:#c8d6c4;font:14px ui-monospace,monospace;display:flex;height:100vh;margin:0;align-items:center;justify-content:center}
 .b{border:1px solid #1d2a1d;border-radius:8px;padding:26px 30px;text-align:center;background:#11150f}
 input{background:#0c100c;border:1px solid #1d2a1d;color:#c8d6c4;padding:8px 10px;border-radius:5px;font:inherit}
-button{background:#3fae5a;color:#04140a;border:none;padding:8px 16px;border-radius:5px;cursor:pointer;margin-left:6px;font:inherit}</style></head>
-<body><div class=b><div style="color:#7fe39a;letter-spacing:2px;margin-bottom:14px">&#9679; JARVIS</div>
+button{background:#3fae5a;color:#04140a;border:none;padding:8px 16px;border-radius:5px;cursor:pointer;margin-left:6px;font:inherit}
+.hint{color:#6f7e6b;font-size:12px;margin-top:16px;line-height:1.6}
+.hint code{background:#0c100c;border:1px solid #1d2a1d;border-radius:4px;padding:1px 6px;color:#7fe39a}
+.beta{background:#d8a13a;color:#1a1206;font-size:9px;font-weight:700;letter-spacing:1.5px;padding:2px 6px;border-radius:4px;margin-left:8px}</style></head>
+<body><div class=b><div style="color:#7fe39a;letter-spacing:2px;margin-bottom:14px">&#9679; JARVIS <span class=beta>EARLY BETA</span></div>
 <div style="color:#6f7e6b;margin-bottom:12px">access token</div>
 <form onsubmit="location='/?token='+encodeURIComponent(document.getElementById('t').value);return false">
-<input id=t type=password autofocus placeholder="token"><button>enter</button></form></div></body></html>"""
+<input id=t type=password autofocus placeholder="token"><button>enter</button></form>
+<div class=hint>Don't have your token? On the machine running Jarvis, run:<br><code>./install.sh url</code><br>and open the link it prints (it embeds the token).</div></div></body></html>"""
 
 
 def _runs():
