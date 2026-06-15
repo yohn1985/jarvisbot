@@ -456,16 +456,28 @@ def _run_slash(conv, text):
     skill_py = Path(sk["dir"]) / "skill.py"
     py = ROOT / ".venv" / "bin" / "python"
     py = str(py) if py.exists() else sys.executable
-    messaging.reply(f"running `/{name} {rest}`…".rstrip(), conv=conv)
+    # Stream the skill's output live so the owner SEES progress (network sweeps + model calls take
+    # tens of seconds) instead of staring at a frozen chat until it finishes. PYTHONUNBUFFERED so
+    # the child's progress lines arrive immediately; stderr is merged so step logs show too.
+    mid = messaging.stream_start(conv=conv)
+    buf = [f"running `/{name} {rest}`…\n".rstrip() + "\n"]
+    messaging.stream_update(mid, "".join(buf))
     try:
-        p = subprocess.run([py, str(skill_py), *argv], capture_output=True, text=True,
-                           timeout=600, cwd=str(ROOT))
-        out = (p.stdout or "").strip() or (p.stderr or "").strip() or "(no output)"
-    except subprocess.TimeoutExpired:
-        out = "(timed out)"
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        p = subprocess.Popen([py, str(skill_py), *argv], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, cwd=str(ROOT), env=env, bufsize=1)
+        start = time.time()
+        for line in p.stdout:
+            buf.append(line)
+            messaging.stream_update(mid, ("".join(buf))[-6000:])
+            if time.time() - start > 600:
+                p.kill(); buf.append("\n(timed out)"); break
+        try: p.wait(timeout=10)
+        except Exception: pass
+        out = ("".join(buf)).strip() or "(no output)"
     except Exception as e:
-        out = f"(failed: {str(e)[:200]})"
-    messaging.reply(out[:6000], conv=conv)
+        out = ("".join(buf) + f"\n(failed: {str(e)[:200]})").strip()
+    messaging.stream_end(mid, out[:6000])
     try:
         from jarvis.config import load as _load
         from jarvis import feedback

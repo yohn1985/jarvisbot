@@ -104,11 +104,15 @@ def scan_network(max_hosts=256):
     def _scan(h):
         return h, [p for p in _COMMON_PORTS if _port_open(h, p)]
 
-    found = {}
+    found = {}; done = 0; total = len(targets)
+    print(f"[discover]   sweeping {total} hosts × {len(_COMMON_PORTS)} ports (closed ports wait on a 0.3s timeout)…", flush=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=120) as ex:
         for h, ports in ex.map(_scan, targets):
+            done += 1
             if ports:
                 found[h] = ports
+            if done % 25 == 0 or done == total:
+                print(f"[discover]   swept {done}/{total} hosts · {len(found)} live so far", flush=True)
     return found
 
 
@@ -383,16 +387,17 @@ def main():
         print("[discover] suggested:\n" + out if out else "[discover] nothing new to suggest")
         return
 
-    print("[discover] scanning host...", file=sys.stderr)
+    print("[discover] reading this host (services, ports, disks, network)…", flush=True)
     facts = scan_host()
     if a.network:
-        print("[discover] scanning local network (bounded)...", file=sys.stderr)
+        print("[discover] sweeping the local subnet for other devices…", flush=True)
         net = scan_network()
         facts["network_scan"] = "\n".join(
             f"{h}: ports {', '.join(map(str, ports))}"
             for h, ports in sorted(net.items(), key=lambda kv: ipaddress.ip_address(kv[0]))
         ) or "(no responsive hosts/ports found)"
-    print("[discover] organizing with the brain...", file=sys.stderr)
+    route = ((cfg.get("llm", {}) or {}).get("routing", {}) or {}).get("orchestrator", "the brain")
+    print(f"[discover] organizing findings with {route} (the model is thinking — up to ~240s)…", flush=True)
     doc = organize(llm, facts)
 
     DISC_DIR.mkdir(parents=True, exist_ok=True)
