@@ -203,10 +203,11 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None) -> str:
 
 def repair_unexecuted_command_plan(llm, latest: str, answer_text: str, thinking_text: str = "",
                                    status=None) -> str:
-    """If a model dumps bash commands instead of using tools, execute the safe plan and summarize."""
+    """If a model dumps tool commands instead of using tools, execute the safe plan and summarize."""
     combined = "\n\n".join(x for x in (answer_text, thinking_text) if x)
     commands = chat_tools.extract_shell_commands(combined, limit=8)
-    if not commands:
+    calls = chat_tools.extract_xml_tool_calls(combined, limit=8)
+    if not commands and not calls:
         return ""
     evidence = []
     for cmd in commands:
@@ -217,9 +218,17 @@ def repair_unexecuted_command_plan(llm, latest: str, answer_text: str, thinking_
                 pass
         result = chat_tools.run_shell(cmd, timeout=20)
         evidence.append(chat_tools.format_result(result))
+    for call in calls:
+        if status:
+            try:
+                status(f"executing recovered {call.get('tool')} tool...")
+            except Exception:
+                pass
+        result = chat_tools.run_model_tool(call, latest)
+        evidence.append(chat_tools.format_result(result))
     ev = "\n\n".join(evidence)
     prompt = (
-        "The model produced shell commands instead of a final answer. Jarvis executed the safe commands below.\n"
+        "The model produced tool calls instead of a final answer. Jarvis executed the safe calls below.\n"
         "Give a concise, outcome-focused answer to the owner from this evidence. Do not include command blocks unless needed.\n\n"
         f"Owner message:\n{latest}\n\n"
         f"Executed evidence:\n{ev}\n"

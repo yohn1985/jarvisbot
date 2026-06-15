@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import tempfile
 import json
+import html
 from pathlib import Path
 
 
@@ -318,6 +319,9 @@ def _json_candidate(text: str) -> str | None:
 def parse_model_tool_call(text: str) -> dict | None:
     candidate = _json_candidate(text)
     if not candidate:
+        xml_calls = extract_xml_tool_calls(text, limit=1)
+        if xml_calls:
+            return xml_calls[0]
         cmds = extract_shell_commands(text, limit=1)
         if cmds:
             return {"tool": "shell", "args": {"cmd": cmds[0]}}
@@ -337,6 +341,44 @@ def parse_model_tool_call(text: str) -> dict | None:
             return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
     return {"tool": tool, "args": args}
+
+
+def _xml_attrs(raw: str) -> dict:
+    attrs = {}
+    for key, quote, value in re.findall(r"([A-Za-z_][\w:-]*)\s*=\s*(['\"])(.*?)\2", raw or "", flags=re.S):
+        attrs[key.lower()] = html.unescape(value)
+    return attrs
+
+
+def extract_xml_tool_calls(text: str, limit: int = 8) -> list[dict]:
+    """Recover XML-ish tool calls from models that use Anthropic/Codex-like pseudo tags.
+
+    Examples:
+      <read_file path="/tmp/a.txt" />
+      <search pattern="foo" path="/repo" />
+      <shell cmd="uptime" />
+    """
+    out: list[dict] = []
+    raw_text = text or ""
+    for tag, attrs_raw in re.findall(r"<(read_file|read|search|grep|shell|bash)\b([^>]*)/?>", raw_text, flags=re.I):
+        tag_l = tag.lower()
+        attrs = _xml_attrs(attrs_raw)
+        if tag_l in {"read_file", "read"}:
+            path = attrs.get("path") or attrs.get("file")
+            if path:
+                out.append({"tool": "read", "args": {"path": path}})
+        elif tag_l in {"search", "grep"}:
+            pattern = attrs.get("pattern") or attrs.get("query") or attrs.get("text")
+            path = attrs.get("path") or attrs.get("root")
+            if pattern:
+                out.append({"tool": "search", "args": {"pattern": pattern, "path": path or str(default_cwd())}})
+        elif tag_l in {"shell", "bash"}:
+            cmd = attrs.get("cmd") or attrs.get("command")
+            if cmd and not shell_safety_error(cmd):
+                out.append({"tool": "shell", "args": {"cmd": cmd}})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def extract_shell_commands(text: str, limit: int = 8) -> list[str]:
