@@ -189,7 +189,7 @@ def run(base: str, token: str) -> dict:
         and routed_high == "finance-oncall"
         and routed_critical == "finance-oncall"
         and "JARVIS_EDIT" in edit_trace
-        and "route_incident" in edit_text,
+        and "finance-oncall" in edit_text,
         (
             f"ANSWER:\n{edit_text}\n\n"
             f"TRACE_HAS_MARKER:{'JARVIS_EDIT' in edit_trace}\n"
