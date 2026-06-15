@@ -179,6 +179,22 @@ def compact_evidence(text: str, limit: int = 4500) -> str:
     return "\n".join(lines)[-limit:]
 
 
+def compact_tool_evidence_for_storage(text: str, limit: int = 8000) -> str:
+    """Store tool evidence without losing edit-card markers behind large file reads."""
+    if not text or len(text) <= limit:
+        return text or ""
+    marker_lines = [line for line in text.splitlines() if line.strip().startswith("JARVIS_EDIT ")]
+    marker_block = "\n".join(marker_lines)
+    remaining = max(1000, limit - len(marker_block) - 80)
+    tail = text[-remaining:]
+    parts = []
+    if marker_block:
+        parts.append(marker_block)
+    parts.append("[tool evidence truncated; tail kept for follow-up context]")
+    parts.append(tail)
+    return "\n".join(parts)[-limit:]
+
+
 def learn_owner_correction_now(owner_text: str) -> bool:
     """Persist explicit owner corrections before the next fresh conversation can ask about them."""
     text = (owner_text or "").strip()

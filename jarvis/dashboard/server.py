@@ -767,7 +767,8 @@ def _chat_reply(conv):
                 web_ctx = ""
         tool_ctx = harness.collect_tool_evidence(llm, base, last, status=status_note)
         if tool_ctx:
-            buf["ev"] += "\nHarness: tool evidence gathered for follow-up questions\n" + tool_ctx[:6000] + "\n"
+            stored_tool_ctx = harness.compact_tool_evidence_for_storage(tool_ctx)
+            buf["ev"] += "\nHarness: tool evidence gathered for follow-up questions\n" + stored_tool_ctx + "\n"
             messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
             status_note("summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
