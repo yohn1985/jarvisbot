@@ -442,8 +442,8 @@ function highlightYamlValue(value){
 }
 function highlightJson(code){
   return esc(code||'')
-    .replace(/(&quot;.*?&quot;)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
-    .replace(/(:\s*)(&quot;.*?&quot;)/g,'$1<span class="syn-str">$2</span>')
+    .replace(/(".*?"|&quot;.*?&quot;)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
+    .replace(/(:\s*)(".*?"|&quot;.*?&quot;)/g,'$1<span class="syn-str">$2</span>')
     .replace(/\b(true|false|null)\b/g,'<span class="syn-key">$1</span>')
     .replace(/\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g,'<span class="syn-num">$&</span>');
 }
@@ -844,7 +844,7 @@ function renderChat(msgs){
     const cell=cl.querySelector('[data-mid="'+streamMsg.id+'"] .msg');
     if(cell){ cell.innerHTML=renderBody(streamMsg);
       const tb=cl.querySelector('[data-mid="'+streamMsg.id+'"] .thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
-      if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
+      if(!cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
       return; } }
   const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,(m.text||'').length,(m.thinking||'').length,(m.evidence||'').length,!!m.streaming]))+'|'+brainChoice+'|'+
     (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
@@ -945,7 +945,7 @@ function renderLive(){
   const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,status:_live.status,streaming:true};
   row.querySelector('.msg').innerHTML=renderBody(m);
   const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
-  if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
+  if(!cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
 }
 function addLiveStep(text){
   text=(text||'').trim(); if(!text) return;
