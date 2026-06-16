@@ -900,6 +900,7 @@ function selectConv(id){ activeConv=id; _focusLatestTurn=true; _chatSig=''; _cha
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
 function scrollToRecentContext(cl){
   if(!cl) return false;
+  cl.querySelectorAll('.turnspacer').forEach(e=>e.remove());
   const rows=[...cl.querySelectorAll('.row[data-mid]')];
   const owners=rows.filter(r=>r.classList.contains('orow'));
   const target=owners[owners.length-1];
