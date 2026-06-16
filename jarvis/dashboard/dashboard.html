@@ -441,8 +441,8 @@ function highlightYamlValue(value){
 }
 function highlightJson(code){
   return esc(code||'')
-    .replace(/(&quot;(?:\\.|[^&])*?&quot;)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
-    .replace(/(:\s*)(&quot;(?:\\.|[^&])*?&quot;)/g,'$1<span class="syn-str">$2</span>')
+    .replace(/(&quot;.*?&quot;)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
+    .replace(/(:\s*)(&quot;.*?&quot;)/g,'$1<span class="syn-str">$2</span>')
     .replace(/\b(true|false|null)\b/g,'<span class="syn-key">$1</span>')
     .replace(/\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g,'<span class="syn-num">$&</span>');
 }
