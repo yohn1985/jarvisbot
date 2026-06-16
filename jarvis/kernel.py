@@ -59,7 +59,9 @@ def tick(cfg) -> dict:
     decision = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
                 "who": who, "rung": rung, "action": action, "mode": mode,
                 "would_execute": mode != "shadow",
-                "backlog": world.get("_backlog_count", 0)}
+                "backlog": world.get("_backlog_count", 0),
+                "cognitive_profile": "heavy",
+                "cognitive_reason": "autonomous tick"}
     think(cfg, decision, world)
     if not decision.get("asked"):          # if we asked the owner, wait for an answer — don't act
         act(cfg, decision, world)
@@ -199,6 +201,25 @@ def act(cfg, decision, world):
     records the INTENT. So this is always safe to call."""
     rung = decision["rung"]
     if rung == "p5_curiosity":          # autonomous discovery + documentation (read-only)
+        # When curiosity is heavy (live state / verified-memory needed) and the queue is
+        # clear, use the full GROUND→VERIFY→LEARN loop instead of the explore shortcut.
+        profile = {"mode": decision.get("cognitive_profile", "daily"),
+                   "reason": decision.get("cognitive_reason", ""),
+                   "required_checks": [], "reasons": []}
+        if profile["mode"] == "heavy" and not _open_question_count():
+            try:
+                from jarvis.adapters.llm import build_llm
+                from jarvis import harness
+                llm = build_llm(cfg)
+                if llm:
+                    result = harness.run_heavy_task(llm, cfg, decision["action"], profile)
+                    decision["worker"] = (
+                        f"curiosity (heavy): {result.get('text', '')[:80]}"
+                        + (" [verified]" if result.get("verified") else " [unverified]")
+                    )
+                    return
+            except Exception:
+                pass  # fall through to normal explore on any failure
         _explore(cfg, decision)
         return
     backlog = world.get("needs_human_backlog") or []
@@ -235,7 +256,7 @@ def think(cfg, decision, world):
         return
     try:
         from jarvis.adapters.llm import build_llm
-        from jarvis import messaging, persona
+        from jarvis import messaging, persona, harness
     except Exception:
         return
     llm = build_llm(cfg)
@@ -243,13 +264,20 @@ def think(cfg, decision, world):
         return
     recurring = [r.get("sig") for r in world.get("_ledger", {}).get("recurring", [])][:3]
     open_qs = _open_question_count()
-    # The tick reasons on the MAIN brain (orchestrator), in character — this is Jarvis thinking,
-    # not a cheap triage paraphrase. Persona makes it driven + skeptical instead of a narrator.
+
+    # FRAME: deterministic selector — tick always triggers heavy because autonomous work must
+    # treat memory as hints and verify live state before acting. Store on decision so act() sees it.
+    profile = harness.select_execution_profile(decision["action"], trigger="tick")
+    decision["cognitive_profile"] = profile["mode"]
+    decision["cognitive_reason"] = profile["reason"]
+
+    # Prompt uses the profile instruction consistently with the chat path (not duplicated ad hoc).
     prompt = (
         persona.system(cfg) + "\n\n"
         f"This is an autonomous {decision['mode']} tick. You triaged to rung={decision['rung']} "
         f"-> {decision['action']}.\n"
-        f"Open backlog: {world.get('_backlog_count', 0)}. Questions you're still chasing: {open_qs}. "
+        + harness.profile_prompt(profile)
+        + f"Open backlog: {world.get('_backlog_count', 0)}. Questions you're still chasing: {open_qs}. "
         f"Recurring issues in memory: {recurring}.\n\n"
         "Think like the owner of this system, not a narrator. In 2-3 sharp, specific sentences: is this "
         "the right next move, and what is the concrete first step? Be skeptical; don't restate the "

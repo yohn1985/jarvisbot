@@ -7,6 +7,7 @@ actually inspect.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,8 @@ LEARNING_GAPS_DIR = KNOW_DIR / "learning-gaps"
 LEARNED = KNOW_DIR / "learned.jsonl"
 LEARNED_DIR = KNOW_DIR / "learned"
 QUESTIONS = KNOW_DIR / "questions.json"
+DEFAULT_HINT_TTL_SECONDS = 30 * 24 * 3600
+VOLATILE_TTL_SECONDS = 3600
 
 MAX_ROOTS = 40
 MAX_FILES = 700
@@ -622,7 +625,7 @@ def _retrieve_learned_memories(query: str, limit: int = 5) -> str:
     hits.sort(key=lambda pair: -pair[0])
     lines = [
         "Learned memories relevant to this question:",
-        "These are durable learned facts. Prefer them for direct memory recall unless newer tool evidence contradicts them.",
+        "Treat these as hints, not truth. Prefer live/source evidence when a hint is volatile, stale, low-confidence, contradicted, or marked must_verify_before_answer.",
     ]
     seen = set()
     for _, row in hits[:limit]:
@@ -630,8 +633,25 @@ def _retrieve_learned_memories(query: str, limit: int = 5) -> str:
         if not fact or fact.lower() in seen:
             continue
         seen.add(fact.lower())
+        trust = _row_trust_policy(row)
+        volatility = _row_volatility(row)
+        confidence = str(row.get("confidence") or "medium")
+        stale = _memory_is_stale(row)
+        verified_at = str(row.get("last_verified_at") or "")
+        observed_at = str(row.get("last_observed_at") or row.get("ts") or "")
+        kind = str(row.get("kind") or "stable_fact")
         lines.append(
-            f"\nMEMORY: {fact}\nSCOPE: {row.get('scope', '')}\nSOURCE: {row.get('source', '')}\nLEARNED: {row.get('ts', '')}"
+            f"\nMEMORY: {fact}"
+            f"\nKIND: {kind}"
+            f"\nSCOPE: {row.get('scope', '')}"
+            f"\nSOURCE: {row.get('source', '')}"
+            f"\nTRUST_POLICY: {trust}"
+            f"\nVOLATILITY: {volatility}"
+            f"\nCONFIDENCE: {confidence}"
+            f"\nSTALE: {'yes' if stale else 'no'}"
+            f"\nOBSERVED: {observed_at}"
+            f"\nVERIFIED: {verified_at}"
+            f"\nLEARNED: {row.get('ts', '')}"
         )
     return "\n".join(lines)[:5000] if len(lines) > 2 else ""
 
@@ -732,8 +752,15 @@ def record_learning_gap(question: str, answer: str = "", reason: str = "unknown"
 
 
 def record_learned_memory(fact: str, source: str = "reflection", scope: str = "project",
-                          keywords: list[str] | None = None, evidence: str = "") -> bool:
-    """Persist a verified learned fact as both JSONL and an indexed markdown note."""
+                          keywords: list[str] | None = None, evidence: str = "",
+                          kind: str | None = None, trust_policy: str | None = None,
+                          volatility: str | None = None, confidence: str | None = None,
+                          ttl_seconds: int | None = None, verified: bool = False) -> bool:
+    """Persist a learned hint as both JSONL and an indexed markdown note.
+
+    Memory is deliberately not stored as truth. New records carry trust metadata so a future
+    turn can use them as orientation while still re-checking volatile or stale claims.
+    """
     fact = (fact or "").strip()
     if len(fact) < 8:
         return False
@@ -757,13 +784,34 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
         pass
     KNOW_DIR.mkdir(parents=True, exist_ok=True)
     LEARNED_DIR.mkdir(parents=True, exist_ok=True)
+    inferred = _infer_memory_metadata(
+        fact,
+        source=source,
+        evidence=evidence,
+        kind=kind,
+        trust_policy=trust_policy,
+        volatility=volatility,
+        confidence=confidence,
+        ttl_seconds=ttl_seconds,
+        verified=verified,
+    )
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    safe_evidence = _redact_evidence(evidence or "")[:2000]
     row = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "ts": now,
         "fact": fact[:2000],
         "source": source[:80],
         "scope": (scope or "project")[:40],
         "keywords": [str(k)[:80] for k in (keywords or [])[:20]],
-        "evidence": (evidence or "")[:2000],
+        "evidence": safe_evidence,
+        "evidence_ref": _evidence_ref(safe_evidence),
+        "kind": inferred["kind"],
+        "trust_policy": inferred["trust_policy"],
+        "volatility": inferred["volatility"],
+        "confidence": inferred["confidence"],
+        "ttl_seconds": inferred["ttl_seconds"],
+        "last_observed_at": now,
+        "last_verified_at": now if verified else "",
     }
     with LEARNED.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
@@ -776,6 +824,14 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
         f"- Scope: {row['scope']}",
         f"- Source: {row['source']}",
         f"- Learned at: {row['ts']}",
+        f"- Kind: {row['kind']}",
+        f"- Trust policy: {row['trust_policy']}",
+        f"- Volatility: {row['volatility']}",
+        f"- Confidence: {row['confidence']}",
+        f"- TTL seconds: {row['ttl_seconds']}",
+        f"- Last observed at: {row['last_observed_at']}",
+        f"- Last verified at: {row['last_verified_at'] or 'not verified'}",
+        f"- Evidence ref: {row['evidence_ref']}",
         f"- Keywords: {', '.join(row['keywords'])}",
         "",
         "## Fact",
@@ -787,6 +843,112 @@ def record_learned_memory(fact: str, source: str = "reflection", scope: str = "p
     path.write_text("\n".join(body).strip() + "\n", encoding="utf-8")
     refresh_index(force=True)
     return True
+
+
+def _infer_memory_metadata(fact: str, *, source: str = "", evidence: str = "",
+                           kind: str | None = None, trust_policy: str | None = None,
+                           volatility: str | None = None, confidence: str | None = None,
+                           ttl_seconds: int | None = None, verified: bool = False) -> dict:
+    text = " ".join([fact or "", source or "", evidence or ""]).lower()
+    volatile = _looks_volatile(text)
+    preference = _looks_like_preference(text, source)
+    procedure = _looks_like_procedure(text)
+
+    out_kind = (kind or "").strip() or (
+        "volatile_status" if volatile else
+        "preference" if preference else
+        "procedure" if procedure else
+        "stable_fact"
+    )
+    out_volatility = (volatility or "").strip() or ("volatile" if volatile else "stable")
+    out_trust = (trust_policy or "").strip() or (
+        "must_verify_before_answer" if volatile else
+        "can_use_directly" if preference or procedure else
+        "use_as_hint"
+    )
+    out_confidence = (confidence or "").strip() or ("high" if verified else "medium")
+    if ttl_seconds is None:
+        ttl_seconds = VOLATILE_TTL_SECONDS if out_volatility == "volatile" else DEFAULT_HINT_TTL_SECONDS
+    return {
+        "kind": _choice(out_kind, {"preference", "procedure", "stable_fact", "snapshot", "volatile_status", "warning", "gap"}, "stable_fact"),
+        "volatility": _choice(out_volatility, {"stable", "snapshot", "volatile"}, "stable"),
+        "trust_policy": _choice(out_trust, {"use_as_hint", "can_use_directly", "must_verify_before_answer"}, "use_as_hint"),
+        "confidence": _choice(out_confidence, {"low", "medium", "high"}, "medium"),
+        "ttl_seconds": max(0, int(ttl_seconds or 0)),
+    }
+
+
+def _choice(value: str, allowed: set[str], default: str) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in allowed else default
+
+
+def _looks_volatile(text: str) -> bool:
+    return any(s in text for s in (
+        "currently", "right now", "today", "latest", "recent", "current status",
+        "is running", "was running", "service is", "queue is", "queue count",
+        "deployed", "not deployed", "fixed", "broken", "failing", "passing",
+        "uptime", "load average", "price", "cost", "version", "release",
+        "provider status", "account status", "ticket status",
+    ))
+
+
+def _looks_like_preference(text: str, source: str = "") -> bool:
+    if str(source or "").startswith("owner"):
+        return any(s in text for s in (
+            "prefer", "preference", "likes", "wants", "always", "never",
+            "do not", "don't", "next time", "remember that i", "remember this",
+        ))
+    return False
+
+
+def _looks_like_procedure(text: str) -> bool:
+    return any(s in text for s in (
+        "runbook", "canonical", "use ", "command", "deploys from", "lives at",
+        "repo", "repository", "path", "docs", "documentation", "workflow",
+    ))
+
+
+def _redact_evidence(evidence: str) -> str:
+    text = evidence or ""
+    patterns = (
+        r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)\s*[:=]\s*['\"]?[^'\"\s]+",
+        r"(?i)bearer\s+[a-z0-9._~+/=-]{12,}",
+        r"sk-[a-zA-Z0-9_-]{12,}",
+    )
+    for pat in patterns:
+        text = re.sub(pat, "[redacted-secret]", text)
+    return text
+
+
+def _evidence_ref(evidence: str) -> str:
+    if not evidence:
+        return ""
+    digest = hashlib.sha256(evidence.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return f"inline-redacted-sha256:{digest}"
+
+
+def _row_trust_policy(row: dict) -> str:
+    return _choice(str(row.get("trust_policy") or "use_as_hint"), {"use_as_hint", "can_use_directly", "must_verify_before_answer"}, "use_as_hint")
+
+
+def _row_volatility(row: dict) -> str:
+    return _choice(str(row.get("volatility") or "stable"), {"stable", "snapshot", "volatile"}, "stable")
+
+
+def _memory_is_stale(row: dict) -> bool:
+    try:
+        ttl = int(row.get("ttl_seconds") or 0)
+    except Exception:
+        ttl = 0
+    if ttl <= 0:
+        return False
+    raw = str(row.get("last_verified_at") or row.get("last_observed_at") or row.get("ts") or "")
+    try:
+        ts = time.mktime(time.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return True
+    return time.time() - ts > ttl
 
 
 def _memory_identifiers(text: str) -> set[str]:

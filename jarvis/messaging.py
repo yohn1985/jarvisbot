@@ -198,6 +198,25 @@ def stream_update(mid: str, text: str, thinking: str | None = None, evidence: st
     _mutate(fn)
 
 
+def finalize_orphaned_streams() -> int:
+    """Clear the streaming flag on any message still marked streaming. A streamed reply cannot
+    survive a process restart, so on boot a streaming=True message is orphaned — without this it
+    shows a frozen hanging cursor forever. Returns how many were finalized."""
+    n = {"c": 0}
+    def fn(rows):
+        changed = False
+        for m in rows:
+            if m.get("streaming"):
+                m["streaming"] = False
+                if not (m.get("text") or "").strip():
+                    m["text"] = ((m.get("text") or "") + "  ⏹ (interrupted)").strip()
+                n["c"] += 1
+                changed = True
+        return changed
+    _mutate(fn)
+    return n["c"]
+
+
 def stream_end(mid: str, text: str | None = None, thinking: str | None = None, evidence: str | None = None) -> None:
     """Finalize a streamed message (clears the streaming flag / cursor)."""
     def fn(rows):

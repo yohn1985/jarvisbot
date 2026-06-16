@@ -12,7 +12,7 @@ Open-source-clean: no infra-specific anything; reads only Jarvis's own state + c
 Meant to be the foundation an outsourced front-end can iterate on (the /api/* JSON is stable).
 """
 from __future__ import annotations
-import argparse, http.cookies, json, os, queue, secrets as _rand, signal, subprocess, sys, threading, time
+import argparse, http.cookies, json, os, queue, re, secrets as _rand, signal, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -152,19 +152,172 @@ def _pools(refresh=False):
     backends = dict(DEFAULT_BACKENDS)
     backends.update(llm.get("backends") or {})
 
-    def _caps(n, s):
-        # Reasoning capability comes from the backend KIND, not a model-name guess (so DeepSeek via
-        # the OpenAI-style ollama_cloud HTTP backend correctly offers 'effort'). thinking = Anthropic.
-        if n in ("claude", "anthropic") or (isinstance(s, dict) and s.get("format") == "anthropic"):
-            return {"effort": False, "thinking": True}
-        if n in ("codex", "openai", "ollama_cloud") or (isinstance(s, dict) and s.get("http")):
-            return {"effort": True, "thinking": False}
-        return {"effort": False, "thinking": False}
-
-    pools = [{"name": n, "models": _detect_models(n, s), "caps": _caps(n, s)} for n, s in backends.items()]
+    pools = [{"name": n, "models": _detect_models(n, s), "caps": _pool_control_caps(n, s)} for n, s in backends.items()]
     data = {"pools": pools, "aliases": llm.get("aliases") or {}}
     _POOLS_CACHE.update(ts=time.time(), data=data)
     return data
+
+
+_THINKING_OPTIONS = ["default", "low", "medium", "high", "max"]
+_CODEX_EFFORT_OPTIONS = ["default", "minimal", "low", "medium", "high"]
+_OLLAMA_EFFORT_OPTIONS = ["default", "none", "low", "medium", "high"]
+
+
+def _pool_control_caps(pool_name: str, spec) -> dict:
+    """Coarse backend controls. Model-specific controls are in _model_controls()."""
+    if pool_name in ("claude", "anthropic") or (isinstance(spec, dict) and spec.get("format") == "anthropic"):
+        return {"effort": False, "thinking": True}
+    if pool_name in ("codex", "openai"):
+        return {"effort": True, "thinking": False}
+    if pool_name == "ollama_cloud" or (
+        isinstance(spec, dict) and spec.get("http") and "ollama" in (spec.get("http") or "").lower()
+    ):
+        # Ollama Cloud needs model metadata too: only thinking-capable models accept effort control.
+        return {"effort": True, "thinking": False}
+    if isinstance(spec, dict) and spec.get("http"):
+        return {"effort": True, "thinking": False}
+    return {"effort": False, "thinking": False}
+
+
+# Context-window detection. Ollama exposes it via POST /api/show (model_info "*.context_length");
+# Anthropic/OpenAI do NOT return it from their APIs, so fall back to a small known map + default.
+_MODEL_CTX_CACHE: dict = {}
+_STATIC_CTX = {
+    "claude-opus-4-8": 200000, "claude-opus-4-7": 200000, "claude-opus-4-6": 200000,
+    "claude-opus-4-5": 200000, "claude-sonnet-4-6": 200000, "claude-sonnet-4-5": 200000,
+    "claude-haiku-4-5": 200000, "claude-fable-5": 200000,
+    "opus": 200000, "sonnet": 200000, "haiku": 200000,
+    "gpt-5.5": 400000, "gpt-5.5-codex": 400000, "gpt-5": 400000,
+    "gpt-5-codex": 400000, "gpt-5.3-codex": 400000, "o4-mini": 200000,
+    "gpt-4.1": 1000000,
+}
+_DEFAULT_CTX = 128000
+
+
+def _ollama_show(http_url: str, model: str, key: str) -> dict:
+    """POST /api/show on an Ollama endpoint, derived from the chat-completions URL."""
+    import urllib.request
+    base = (http_url or "").split("/v1/")[0].rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(base + "/api/show", data=json.dumps({"model": model}).encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.loads(r.read())
+
+
+def _context_window(pool_name, spec, model) -> dict:
+    """Real context window + capabilities for backend:model. Cached 1h per (pool, model)."""
+    import time
+    ck = (pool_name, model)
+    cached = _MODEL_CTX_CACHE.get(ck)
+    if cached and time.time() - cached["ts"] < 3600:
+        return cached
+    window, caps = 0, []
+    try:
+        if isinstance(spec, dict) and spec.get("http") and "ollama" in (spec.get("http") or "").lower():
+            data = _ollama_show(spec["http"], model, os.environ.get(spec.get("api_key_env", ""), ""))
+            caps = data.get("capabilities") or []
+            for k, v in (data.get("model_info") or {}).items():
+                if k.endswith(".context_length") and isinstance(v, int):
+                    window = v
+                    break
+    except Exception:
+        window = 0
+    if not window:
+        window = _STATIC_CTX.get(model) or _STATIC_CTX.get(str(model).split("/")[-1]) or _DEFAULT_CTX
+    info = {"context_window": window, "capabilities": caps, "ts": time.time()}
+    _MODEL_CTX_CACHE[ck] = info
+    return info
+
+
+def _split_route(route: str) -> tuple[str, str]:
+    pool, _, model = (route or "").partition(":")
+    return pool, model
+
+
+def _model_controls(pool_name: str, spec, model: str, detected: dict, params: dict) -> dict:
+    caps = detected.get("capabilities") or []
+    base = _pool_control_caps(pool_name, spec)
+    controls = {
+        "effort": {"supported": False, "options": ["default"], "value": "default"},
+        "thinking": {"supported": False, "options": ["default"], "value": "default"},
+    }
+    if base.get("thinking"):
+        value = str(params.get("thinking") or "default")
+        controls["thinking"] = {
+            "supported": True,
+            "options": _THINKING_OPTIONS,
+            "value": value if value in _THINKING_OPTIONS else "default",
+        }
+    if pool_name == "codex":
+        value = str(params.get("effort") or "default")
+        controls["effort"] = {
+            "supported": True,
+            "options": _CODEX_EFFORT_OPTIONS,
+            "value": value if value in _CODEX_EFFORT_OPTIONS else "default",
+        }
+    elif pool_name == "ollama_cloud" or (
+        isinstance(spec, dict) and spec.get("http") and "ollama" in (spec.get("http") or "").lower()
+    ):
+        # Ollama's OpenAI-compatible endpoint supports reasoning_effort only for thinking models.
+        if "thinking" in caps:
+            value = str(params.get("effort") or "default")
+            controls["effort"] = {
+                "supported": True,
+                "options": _OLLAMA_EFFORT_OPTIONS,
+                "value": value if value in _OLLAMA_EFFORT_OPTIONS else "default",
+            }
+    elif base.get("effort"):
+        value = str(params.get("effort") or "default")
+        controls["effort"] = {
+            "supported": True,
+            "options": _CODEX_EFFORT_OPTIONS,
+            "value": value if value in _CODEX_EFFORT_OPTIONS else "default",
+        }
+    return controls
+
+
+def _effective_reasoning_params(params: dict, controls: dict) -> tuple[dict, dict]:
+    effective, unsupported = {}, {}
+    params = params or {}
+    for key in ("effort", "thinking"):
+        val = params.get(key)
+        ctl = (controls or {}).get(key) or {}
+        if val in (None, "", "default"):
+            continue
+        if ctl.get("supported") and val in (ctl.get("options") or []):
+            effective[key] = val
+        else:
+            unsupported[key] = val
+    return effective, unsupported
+
+
+def _model_info(role="orchestrator", route: str | None = None,
+                pool: str | None = None, model: str | None = None,
+                llm_override: dict | None = None) -> dict:
+    """Routed model + detected context window + reasoning params for a role (drives the chat chips
+    and autocompaction). Falls back safely if routing/backends are incomplete."""
+    from jarvis.config import load
+    from jarvis.adapters.llm import DEFAULT_BACKENDS
+    llm = llm_override or (load().get("llm") or {})
+    route = route if route is not None else ((llm.get("routing") or {}).get(role) or "")
+    route_pool, route_model = _split_route(route)
+    pool = pool or route_pool
+    model = model or route_model or route
+    route = f"{pool}:{model}" if pool and model else route
+    backends = dict(DEFAULT_BACKENDS)
+    backends.update(llm.get("backends") or {})
+    spec = backends.get(pool)
+    info = _context_window(pool, spec, model) if spec else {"context_window": _DEFAULT_CTX, "capabilities": []}
+    params = (llm.get("params") or {}).get(role) or {}
+    controls = _model_controls(pool, spec, model, info, params)
+    effective, unsupported = _effective_reasoning_params(params, controls)
+    return {"role": role, "route": route, "pool": pool, "model": model or route,
+            "context_window": info["context_window"], "capabilities": info["capabilities"],
+            "controls": controls, "effective_params": effective, "unsupported_params": unsupported,
+            "effort": controls["effort"]["value"] if controls["effort"]["supported"] else None,
+            "thinking": controls["thinking"]["value"] if controls["thinking"]["supported"] else None}
 
 
 # Sections the owner is allowed to override from the CONFIG tab, and the validation each needs so a
@@ -181,6 +334,44 @@ def _write_yaml(path, data):
     with open(tmp, "w") as f:
         f.write(yaml.safe_dump(data, sort_keys=False))
     os.replace(tmp, str(path))
+
+
+def _sanitize_llm_params(data: dict) -> list[str]:
+    """Drop params unsupported by the selected backend+model so stale controls cannot lie."""
+    llm = data.get("llm") or {}
+    routing = llm.get("routing") or {}
+    params = llm.get("params") or {}
+    if not isinstance(params, dict):
+        return []
+    changed = []
+    for role in sorted(set(routing) | set(params)):
+        slot = params.get(role) or {}
+        if not isinstance(slot, dict):
+            params.pop(role, None)
+            changed.append(f"params.{role}")
+            continue
+        info = _model_info(role=role, llm_override=llm)
+        controls = info.get("controls") or {}
+        clean = {}
+        for key in ("effort", "thinking"):
+            val = slot.get(key)
+            ctl = controls.get(key) or {}
+            if val in (None, "", "default"):
+                continue
+            if ctl.get("supported") and val in (ctl.get("options") or []):
+                clean[key] = val
+            else:
+                changed.append(f"params.{role}.{key}")
+        if clean:
+            if clean != slot:
+                params[role] = clean
+        elif role in params:
+            params.pop(role, None)
+    if params:
+        llm["params"] = params
+    else:
+        llm.pop("params", None)
+    return changed
 
 
 def _save_config(patch):
@@ -217,8 +408,8 @@ def _save_config(patch):
             if not isinstance(rparams, dict):
                 continue
             slot = pr.setdefault(role, {})
-            for k, allowed in (("effort", {"minimal", "low", "medium", "high"}),
-                               ("thinking", {"low", "medium", "high"})):
+            for k, allowed in (("effort", {"none", "minimal", "low", "medium", "high"}),
+                               ("thinking", {"low", "medium", "high", "max"})):
                 v = rparams.get(k)
                 if v in (None, "", "default"):
                     slot.pop(k, None)
@@ -231,6 +422,9 @@ def _save_config(patch):
         if not pr:
             data.get("llm", {}).pop("params", None)
         changed.append("params")
+    cleaned = _sanitize_llm_params(data)
+    for item in cleaned:
+        changed.append(item + ".normalized")
     if isinstance(patch.get("priorities"), list):
         data["priorities"] = [s.strip() for s in patch["priorities"] if str(s).strip()]
         changed.append("priorities")
@@ -704,7 +898,7 @@ def _chat_reply(conv):
             return
         ident = cfg.get("identity") or {}
         name = ident.get("name", "Jarvis")
-        from jarvis import harness
+        from jarvis import chat_tools, harness
         mid = messaging.stream_start(conv)
         buf = {"t": "", "th": "", "ev": "", "last": 0.0}
 
@@ -718,9 +912,16 @@ def _chat_reply(conv):
         if harness.learn_owner_correction_now(last):
             status_note("learned explicit owner correction before answering")
         status_note("grounding in operating prompt and local context...")
-        hctx = harness.build_context(cfg, msgs, last, env_context=env)
+        # Autocompaction: pull a fuller history and compact it against the model's REAL context
+        # window so long conversations don't overflow the model or silently lose old context.
+        ctx_msgs = messaging.messages(conv, limit=200)
+        window = (_model_info("orchestrator") or {}).get("context_window") or 0
+        ctx_msgs, _compacted = harness.maybe_compact_history(llm, ctx_msgs, window, status=status_note)
+        hctx = harness.build_context(cfg, ctx_msgs, last, env_context=env)
         base = hctx["base"]
         local_docs = hctx.get("local_docs", "")
+        profile = harness.select_execution_profile(last, local_docs, trigger="chat")
+        status_note(harness.profile_status(profile))
         srcs = hctx.get("context_sources") or []
         if srcs:
             status_note("grounded in: " + ", ".join(srcs[:3]) + (" ..." if len(srcs) > 3 else ""))
@@ -730,7 +931,7 @@ def _chat_reply(conv):
         if compact_local:
             buf["ev"] += "\nHarness: local evidence gathered for follow-up questions\n" + compact_local + "\n"
             messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
-        fast = harness.fast_local_answer(last, local_docs)
+        fast = "" if profile.get("mode") == "heavy" else harness.fast_local_answer(last, local_docs)
         if fast:
             status_note("answered from local memory without full tool loop")
             messaging.stream_end(mid, fast, thinking=buf["th"], evidence=buf["ev"])
@@ -765,63 +966,168 @@ def _chat_reply(conv):
                 web_ctx, used_web = (ans + (f"\n\nSOURCES:\n{src}" if src else "")), True
             except Exception:
                 web_ctx = ""
-        tool_ctx = harness.collect_tool_evidence(llm, base, last, status=status_note)
+        tool_ctx = harness.collect_tool_evidence(
+            llm,
+            base + harness.profile_prompt(profile),
+            last,
+            status=status_note,
+            force=(profile.get("mode") == "heavy"),
+        )
         if tool_ctx:
             stored_tool_ctx = harness.compact_tool_evidence_for_storage(tool_ctx)
             buf["ev"] += "\nHarness: tool evidence gathered for follow-up questions\n" + stored_tool_ctx + "\n"
             messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
             status_note("summarizing from gathered evidence...")
-        # 2) STREAM the answer on the main brain so it appears as it's written — thinking streamed into
-        #    its own collapsible block. Tokens push live over SSE; persisted (throttled) for history.
-        def on_delta(kind, d):
-            if kind == "thinking":
-                buf["th"] += d
-            else:
-                buf["t"] += d
-            st.emit(kind, d)                          # per-token push to the browser (SSE)
-            now = time.time()
-            if now - buf["last"] > 0.5:               # persistence throttle (SSE is the live path)
-                messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"]); buf["last"] = now
+        # 2) STREAM the answer on the main brain so it appears as it's written. If the model emits
+        #    tool calls mid-answer, execute them, append the observed evidence, and ask again.
+        live_tool_ctx = ""
+        full = ""
 
-        prompt = (base + (f"\nLIVE WEB EVIDENCE:\n{web_ctx}\n" if web_ctx else "")
-                  + (f"\nLOCAL TOOL EVIDENCE:\n{tool_ctx}\n" if tool_ctx else "")
-                  + ("\nThe owner attached image(s) below — examine them to answer." if img_paths else "")
-                  + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
-                  "that fully conveys the essence — no preamble, filler, restating the question, or "
-                  "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
-                  "process narration. State uncertainty and scoped negative evidence precisely: if you only checked "
-                  "specific commands, files, endpoints, or directories, say that instead of making a universal claim. "
-                  "If the owner asks what evidence you used or checked, list the exact files, commands, endpoints, "
-                  "docs, or memories by name/path; do not answer with vague references like 'those files'. "
-                  "Do not name storage backends, runtimes, providers, or architecture pieces unless source or tool evidence names them. "
-                  "Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
-                  f"code in code blocks.\n\n{name}:")
-        try:
-            full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
-                                  should_cancel=lambda: st.cancelled, images=img_paths or None).strip()
-        except Exception:
+        def answer_prompt(extra_tool_ctx: str = ""):
+            combined_tool_ctx = "\n\n".join(x for x in (tool_ctx, extra_tool_ctx) if x)
+            return (base + harness.profile_prompt(profile)
+                    + (f"\nLIVE WEB EVIDENCE:\n{web_ctx}\n" if web_ctx else "")
+                    + (f"\nLOCAL TOOL EVIDENCE:\n{combined_tool_ctx}\n" if combined_tool_ctx else "")
+                    + ("\nThe owner attached image(s) below — examine them to answer." if img_paths else "")
+                    + "\nAnswer the latest owner message. Be as CONCISE as possible: the SMALLEST answer "
+                    "that fully conveys the essence — no preamble, filler, restating the question, or "
+                    "sign-off. Be outcome-focused: give the answer/status/blocker/next action, not just "
+                    "process narration. State uncertainty and scoped negative evidence precisely: if you only checked "
+                    "specific commands, files, endpoints, or directories, say that instead of making a universal claim. "
+                    "If the owner asks what evidence you used or checked, list the exact files, commands, endpoints, "
+                    "docs, or memories by name/path; do not answer with vague references like 'those files'. "
+                    "Do not name storage backends, runtimes, providers, or architecture pieces unless source or tool evidence names them. "
+                    "Use the available tools (shell, read, search) to gather any local evidence you need; "
+                    "when you have enough, give the final answer. Prefer a sentence or two; expand only if genuinely needed. Use markdown; "
+                    f"code in code blocks.\n\n{name}:")
+
+        for step in range(chat_tools.MAX_TOOL_STEPS + 1):
+            attempt = {"t": "", "th": "", "tools": []}
+
+            def on_delta(kind, d):
+                if kind == "tool":                        # NATIVE structured tool call (complete JSON)
+                    attempt["tools"].append(d)
+                    return
+                if kind == "thinking":
+                    buf["th"] += d
+                    attempt["th"] += d
+                else:
+                    buf["t"] += d
+                    attempt["t"] += d
+                st.emit(kind, d)                          # per-token push to the browser (SSE)
+                now = time.time()
+                if now - buf["last"] > 0.5:               # persistence throttle (SSE is the live path)
+                    messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"]); buf["last"] = now
+
+            prompt = answer_prompt(live_tool_ctx)
             try:
-                full = llm.run("orchestrator", prompt, timeout=200).strip()
-            except Exception as e2:
-                full = f"(couldn't reach my brain: {str(e2)[:120]})"
-        if st.cancelled:
-            full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
-        repair = harness.repair_unexecuted_command_plan(
-            llm, last, full or buf["t"], buf["th"], status=status_note
-        )
+                full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
+                                      should_cancel=lambda: st.cancelled, images=img_paths or None,
+                                      tools=chat_tools.TOOL_SPECS).strip()
+            except Exception:
+                try:
+                    full = llm.run("orchestrator", prompt, timeout=200).strip()
+                    attempt["t"] = full
+                except Exception as e2:
+                    full = f"(couldn't reach my brain: {str(e2)[:120]})"
+                    attempt["t"] = full
+            if st.cancelled:
+                full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
+                break
+            observed = "\n\n".join(x for x in (full or attempt["t"], attempt["th"]) if x)
+            recovered = ""
+            if step < chat_tools.MAX_TOOL_STEPS:
+                # Prefer NATIVE structured tool calls (deterministic); only scrape text as a fallback
+                # for backends/models that didn't use the structured channel.
+                native_calls = []
+                for tj in attempt["tools"]:
+                    try:
+                        obj = json.loads(tj)
+                        a = obj.get("arguments")
+                        a = json.loads(a) if isinstance(a, str) else (a or {})
+                        call = chat_tools.normalize_tool_call(obj.get("name"), a if isinstance(a, dict) else {})
+                        if call:
+                            native_calls.append(call)
+                    except Exception:
+                        pass
+                if native_calls:
+                    recovered = harness.run_tool_calls(native_calls, last, status=status_note, limit=3)
+                else:
+                    recovered = harness.execute_recovered_tool_calls(observed, last, status=status_note, limit=1)
+            if not recovered:
+                break
+            live_tool_ctx = "\n\n".join(x for x in (live_tool_ctx, recovered) if x)
+            buf["ev"] += "\nHarness: live tool evidence gathered\n" + harness.compact_tool_evidence_for_storage(recovered) + "\n"
+            buf["t"] = ""
+            full = ""
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
+            status_note("rerunning answer with executed tool evidence")
+        repair = ""
+        if not live_tool_ctx:
+            repair = harness.repair_unexecuted_command_plan(
+                llm, last, full or buf["t"], buf["th"], status=status_note
+            )
         if repair:
             full = repair
             buf["t"] = repair
+        final_text = (full or buf["t"] or "").strip()
+        if not final_text and live_tool_ctx:
+            final_text = live_tool_ctx
+            buf["t"] = final_text
+        elif not final_text and (chat_tools.extract_xml_tool_calls(buf["th"], limit=1) or chat_tools.extract_shell_commands(buf["th"], limit=1)):
+            final_text = "I found tool calls in the model output, but I could not produce a final answer from them. The recovered details are in the Thought and evidence sections."
+            buf["t"] = final_text
+        elif not final_text:
+            final_text = "(no reply)"
+        verification = {"checked": False, "verified": profile.get("mode") != "heavy", "note": ""}
+        if profile.get("mode") == "heavy":
+            try:
+                status_note("verifying heavy-mode answer against gathered evidence")
+                verification = harness.verify_heavy_answer(
+                    llm,
+                    last,
+                    final_text,
+                    "\n\n".join(x for x in (web_ctx, tool_ctx, live_tool_ctx) if x),
+                    profile,
+                )
+                note = verification.get("note") or ("verified" if verification.get("verified") else "not verified")
+                status_note(f"heavy verification: {'passed' if verification.get('verified') else 'failed'} - {note}")
+                if not verification.get("verified"):
+                    final_text = (
+                        final_text
+                        + "\n\nVerification note: I could not fully verify this against current evidence. "
+                        + str(note)
+                    ).strip()
+                    buf["t"] = final_text
+            except Exception as e:
+                verification = {"checked": True, "verified": False, "note": str(e)[:160]}
+                status_note(f"heavy verification failed: {str(e)[:120]}")
+        # Always surface any image the show_image tool produced — even if the model's prose dropped the
+        # markdown, or it ran during heavy-mode grounding (tool_ctx) rather than the in-stream loop
+        # (live_tool_ctx) — so "show me the image" reliably renders inline (md() renders /api/upload).
+        _img_seen = set()
+        for _src in (tool_ctx or "", live_tool_ctx or ""):
+            for _imgmd in re.findall(r"!\[[^\]]*\]\(/api/upload\?f=[^)\s]+\)", _src):
+                _key = _imgmd.rsplit("f=", 1)[-1].rstrip(")")        # dedupe by upload filename
+                if _key in _img_seen:
+                    continue
+                _img_seen.add(_key)
+                if _imgmd not in final_text:
+                    final_text = (final_text + "\n\n" + _imgmd).strip()
+        buf["t"] = final_text
         try:
             status_note("reflection queued")
         except Exception:
             pass
-        messaging.stream_end(mid, full or buf["t"] or "(no reply)", thinking=buf["th"], evidence=buf["ev"])
-        st.emit("done", full)
+        messaging.stream_end(mid, final_text, thinking=buf["th"], evidence=buf["ev"])
+        st.emit("done", final_text)
         _stream_close(conv)
         def _reflect_later():
             try:
-                harness.reflect_and_learn(llm, cfg, last, full or buf["t"], local_docs=local_docs, tool_evidence=tool_ctx)
+                harness.reflect_and_learn(llm, cfg, last, final_text, local_docs=local_docs,
+                                          tool_evidence="\n\n".join(x for x in (tool_ctx, live_tool_ctx) if x),
+                                          profile=profile,
+                                          verified=bool(verification.get("verified")))
             except Exception:
                 pass
         try:
@@ -835,8 +1141,14 @@ def _chat_reply(conv):
         except Exception:
             pass
     except Exception:
-        # ALWAYS close the SSE even if we failed before the normal done — otherwise the browser's
-        # EventSource hangs until its own timeout and the reply looks frozen.
+        # ALWAYS finalize the persisted message AND close the SSE even if we failed/hung before the
+        # normal done — otherwise the message stays streaming=True forever (frozen hanging cursor) and
+        # the browser's EventSource hangs until its own timeout.
+        try:
+            messaging.stream_end(mid, (buf.get("t") or "").strip() + "  ⏹ (interrupted)",
+                                 thinking=buf.get("th", ""), evidence=buf.get("ev", ""))
+        except Exception:
+            pass
         try:
             s = _STREAMS.get(conv)
             if s and not s.done:
@@ -1088,6 +1400,13 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/pools":
             refresh = parse_qs(u.query).get("refresh", ["0"])[0] not in ("0", "", "false")
             return self._send(200, json.dumps(_pools(refresh=refresh)))
+        if u.path == "/api/model-info":
+            q = parse_qs(u.query)
+            role = (q.get("role") or ["orchestrator"])[0]
+            route = (q.get("route") or [None])[0]
+            pool = (q.get("pool") or [None])[0]
+            model = (q.get("model") or [None])[0]
+            return self._send(200, json.dumps(_model_info(role, route=route, pool=pool, model=model)))
         if u.path == "/api/procs":
             return self._send(200, json.dumps(_procs()))
         if u.path == "/api/setup":
@@ -1135,6 +1454,13 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_approve(ids)))
         if u.path == "/api/skill-install":
             return self._send(200, json.dumps(_install_skill((body.get("name") or "").strip())))
+        if u.path == "/api/skills/save":
+            try:
+                from jarvis import skills as _skills_mod
+                res = _skills_mod.save_skill((body.get("name") or "").strip(), body.get("content") or "")
+                return self._send(200 if res.get("ok") else 400, json.dumps(res))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}))
         if u.path == "/api/reindex":
             try:
                 from jarvis.config import load
@@ -1279,6 +1605,13 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--host", default="127.0.0.1")
     a = ap.parse_args()
+    try:                                  # a streamed reply can't survive a restart — unfreeze any orphans
+        from jarvis import messaging
+        n = messaging.finalize_orphaned_streams()
+        if n:
+            print(f"[jarvis-dashboard] finalized {n} orphaned streaming message(s)")
+    except Exception:
+        pass
     _start_background_indexer()
     srv = ThreadingHTTPServer((a.host, a.port), H)
     print(f"[jarvis-dashboard] http://{a.host}:{a.port}")

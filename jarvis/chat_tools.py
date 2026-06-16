@@ -18,6 +18,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Images Jarvis posts into chat live here and are served by the dashboard at /api/upload?f=NAME
+# (same sandboxed dir the owner's uploads use). Keep this in sync with dashboard.server.UPLOADS.
+UPLOADS = ROOT / "state" / "uploads"
+IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
 
 def default_cwd() -> Path:
     candidates: list[Path] = []
@@ -88,8 +94,8 @@ _PROTECTED_WRITE_PREFIXES = (
     "/dev/",
     "/proc/",
     "/sys/",
-    "/home/yohn/.ssh/",
-    "/home/yohn/.codex/",
+    os.path.expanduser("~/.ssh/"),     # protect the running user's secrets (any user, no hardcoded home)
+    os.path.expanduser("~/.codex/"),
 )
 
 
@@ -116,6 +122,51 @@ def mode_description() -> str:
     return "shadow: observe and report only; writes/actions are blocked"
 
 
+# Native OpenAI function specs for the chat answer loop. Sent as the `tools` param so capable models
+# (DeepSeek/OpenAI-style) return DETERMINISTIC structured tool_calls instead of free-text we have to
+# scrape. shell is read-only/safety-gated; read/search are read-only. Mutations (write/edit) stay on
+# the explicit owner-gated text path, not auto-callable here.
+TOOL_SPECS = [
+    {"type": "function", "function": {
+        "name": "shell",
+        "description": "Run a READ-ONLY bash command on the owner's machine and return its output. "
+                       "Destructive/mutating commands are blocked. Use for service status, host/repo "
+                       "facts, logs, pipeline state, etc.",
+        "parameters": {"type": "object", "properties": {
+            "cmd": {"type": "string", "description": "the bash command to run"}}, "required": ["cmd"]}}},
+    {"type": "function", "function": {
+        "name": "read",
+        "description": "Read a text file on the owner's machine and return its contents.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "absolute or repo-relative file path"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "search",
+        "description": "Search files for a regex pattern under a directory and return matches.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {
+        "name": "show_image",
+        "description": "Display an image file in the chat. Give the path to an existing image on the "
+                       "owner's machine (png/jpg/gif/webp); it is copied into the dashboard's served "
+                       "folder and rendered inline in your reply. Use when the owner asks to see an image.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "absolute or repo-relative path to the image file"},
+            "caption": {"type": "string", "description": "optional caption shown as alt text"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "add_skill",
+        "description": "Create a new skill so you (and future turns) gain a reusable capability. A skill "
+                       "is instructions in a SKILL.md — include a 'when_to_use' line and, if it drives a "
+                       "utility, the exact command/script path and steps. Saved to the persistent skills "
+                       "folder and auto-detected afterward. Use when the owner says to add/teach a skill.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "short skill name, e.g. 'create-ad'"},
+            "content": {"type": "string", "description": "the SKILL.md text (instructions; may include YAML "
+                        "frontmatter with description/when_to_use and any script path)"}},
+            "required": ["name", "content"]}}},
+]
+
 TOOL_PROTOCOL = """Local tools are available through Jarvis, independent of the selected model provider.
 If you need local evidence or need to perform an explicitly requested file change, reply with exactly one JSON object and no prose:
 {"tool":"shell","args":{"cmd":"uptime"}}
@@ -124,6 +175,8 @@ If you need local evidence or need to perform an explicitly requested file chang
 {"tool":"write","args":{"path":"example.md","content":"text"}}
 {"tool":"append","args":{"path":"example.md","content":"text"}}
 {"tool":"edit","args":{"path":"example.md","old":"exact text to replace","new":"replacement text"}}
+{"tool":"show_image","args":{"path":"/path/to/ad.png","caption":"the generated ad"}}
+{"tool":"add_skill","args":{"name":"create-ad","content":"---\\nname: create-ad\\ndescription: generate an ad image\\nwhen_to_use: owner asks for an ad\\n---\\nRun: python3 /path/generate_full_ai_ad.py --prompt ... --output ...\\nThen show_image the output."}}
 
 Rules:
 - Use tools for local files, docs, service status, tickets, pipeline state, host facts, repo facts, and other machine-local evidence.
@@ -439,12 +492,69 @@ def parse_model_tool_call(text: str) -> dict | None:
         return None
     tool = (data.get("tool") or "").strip().lower()
     args = data.get("args") or {}
-    if tool not in {"shell", "read", "search", "write", "append", "edit"} or not isinstance(args, dict):
+    if tool not in {"shell", "read", "search", "write", "append", "edit", "show_image", "add_skill"} or not isinstance(args, dict):
         cmds = extract_shell_commands(text, limit=1)
         if cmds:
             return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
     return {"tool": tool, "args": args}
+
+
+def extract_json_tool_calls(text: str, limit: int = 8) -> list[dict]:
+    """Recover JSON tool calls from model output, e.g. {"tool":"shell","args":{"cmd":"uptime"}}.
+
+    Models that follow the JSON tool protocol (DeepSeek and most OpenAI-style models) emit the
+    call in their answer/content rather than as XML or a fenced shell block — so the XML and
+    shell-fence recoverers miss it. Scan for balanced-brace JSON objects and keep valid tool
+    requests. Without this, a perfectly-formed JSON tool call is dropped and the turn dies with
+    no answer (the recurring "Jarvis says it'll do something then does nothing" bug).
+    """
+    out: list[dict] = []
+    raw = text or ""
+    n = len(raw)
+    i = 0
+    while i < n and len(out) < limit:
+        if raw[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        esc = False
+        j = i
+        end = -1
+        while j < n:
+            ch = raw[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+            j += 1
+        if end < 0:
+            break
+        try:
+            data = json.loads(raw[i:end + 1])
+        except Exception:
+            data = None
+        if isinstance(data, dict) and data.get("tool"):
+            args = data.get("args") if isinstance(data.get("args"), dict) else {}
+            # route through the alias mapper so run_command/read_file/etc. JSON also resolve
+            call = _tool_call_from_parts(str(data.get("tool")), {}, {str(k).lower(): v for k, v in args.items()})
+            if call:
+                out.append(call)
+        i = end + 1
+    return out
 
 
 def _xml_attrs(raw: str) -> dict:
@@ -454,6 +564,78 @@ def _xml_attrs(raw: str) -> dict:
     return attrs
 
 
+def _xml_text(raw: str) -> str:
+    raw = re.sub(r"^\s*<!\[CDATA\[|\]\]>\s*$", "", raw or "", flags=re.S)
+    return html.unescape(raw).strip()
+
+
+def _xml_child_args(body: str) -> dict:
+    args: dict[str, str] = {}
+    for attrs_raw, value in re.findall(r"<parameter\b([^>]*)>([\s\S]*?)</parameter>", body or "", flags=re.I):
+        attrs = _xml_attrs(attrs_raw)
+        name = (attrs.get("name") or attrs.get("key") or "").strip().lower()
+        if name:
+            args[name] = _xml_text(value)
+    for name, value in re.findall(
+        r"<(path|file|filename|cmd|command|script|code|pattern|query|text|root|dir|old|new|content)\b[^>]*>([\s\S]*?)</\1>",
+        body or "",
+        flags=re.I,
+    ):
+        args[name.lower()] = _xml_text(value)
+    return args
+
+
+def normalize_tool_call(name: str, args: dict | None = None) -> dict | None:
+    """Normalize a (possibly aliased) tool name + args dict into a canonical {tool,args} call.
+    Used for NATIVE structured tool_calls from the model. Returns None if unsupported/unsafe."""
+    a = {str(k).lower(): v for k, v in (args or {}).items()}
+    return _tool_call_from_parts(name or "", {}, a)
+
+
+def _tool_call_from_parts(tool_name: str, attrs: dict | None = None, child_args: dict | None = None) -> dict | None:
+    tag_l = (tool_name or "").strip().lower()
+    attrs = attrs or {}
+    child_args = child_args or {}
+    args = {**attrs, **child_args}
+    # Liberal aliasing — models invent tool names (read_file, run_command, execute, terminal, ...).
+    # Map them to our canonical tools instead of dropping the call (text-recovery fallback path).
+    if tag_l in {"read_file", "read", "cat", "open", "view_file", "view", "get_file"}:
+        path = args.get("path") or args.get("file") or args.get("filename")
+        if path:
+            return {"tool": "read", "args": {"path": path}}
+    elif tag_l in {"search", "grep", "find", "rg", "ripgrep", "search_files"}:
+        pattern = args.get("pattern") or args.get("query") or args.get("text") or args.get("q")
+        path = args.get("path") or args.get("root") or args.get("dir")
+        if pattern:
+            return {"tool": "search", "args": {"pattern": pattern, "path": path or str(default_cwd())}}
+    elif tag_l in {"shell", "bash", "sh", "run_command", "run_shell", "shell_command", "bash_command",
+                   "command", "execute", "exec", "run", "terminal", "console"}:
+        cmd = args.get("cmd") or args.get("command") or args.get("script") or args.get("code") or args.get("input")
+        if cmd and not shell_safety_error(cmd):
+            return {"tool": "shell", "args": {"cmd": cmd}}
+    elif tag_l in {"write", "append"}:
+        path = args.get("path") or args.get("file")
+        content = args.get("content") or args.get("text")
+        if path and content is not None:
+            return {"tool": tag_l, "args": {"path": path, "content": content}}
+    elif tag_l in {"edit_file", "edit"}:
+        path = args.get("path") or args.get("file")
+        old = args.get("old")
+        new = args.get("new")
+        if path and old is not None and new is not None:
+            return {"tool": "edit", "args": {"path": path, "old": old, "new": new}}
+    elif tag_l in {"show_image", "post_image", "attach_image", "display_image", "send_image", "image"}:
+        path = args.get("path") or args.get("file") or args.get("filename") or args.get("src")
+        if path:
+            return {"tool": "show_image", "args": {"path": path, "caption": args.get("caption") or args.get("alt") or ""}}
+    elif tag_l in {"add_skill", "create_skill", "new_skill", "save_skill", "teach_skill"}:
+        nm = args.get("name") or args.get("skill") or args.get("title")
+        content = args.get("content") or args.get("text") or args.get("body") or args.get("skill_md")
+        if nm and content is not None:
+            return {"tool": "add_skill", "args": {"name": nm, "content": content}}
+    return None
+
+
 def extract_xml_tool_calls(text: str, limit: int = 8) -> list[dict]:
     """Recover XML-ish tool calls from models that use Anthropic/Codex-like pseudo tags.
 
@@ -461,31 +643,38 @@ def extract_xml_tool_calls(text: str, limit: int = 8) -> list[dict]:
       <read_file path="/tmp/a.txt" />
       <search pattern="foo" path="/repo" />
       <shell cmd="uptime" />
+      <tool_call name="read_file"><path>/tmp/a.txt</path></tool_call>
+      <function_calls><invoke name="read_file"><parameter name="path">/tmp/a.txt</parameter></invoke></function_calls>
     """
     out: list[dict] = []
     raw_text = text or ""
-    for tag, attrs_raw in re.findall(r"<(read_file|read|search|grep|shell|bash|edit_file|edit)\b([^>]*)/?>", raw_text, flags=re.I):
-        tag_l = tag.lower()
+    for attrs_raw, body in re.findall(r"<tool_call\b([^>]*)>([\s\S]*?)</tool_call>", raw_text, flags=re.I):
         attrs = _xml_attrs(attrs_raw)
-        if tag_l in {"read_file", "read"}:
-            path = attrs.get("path") or attrs.get("file")
-            if path:
-                out.append({"tool": "read", "args": {"path": path}})
-        elif tag_l in {"search", "grep"}:
-            pattern = attrs.get("pattern") or attrs.get("query") or attrs.get("text")
-            path = attrs.get("path") or attrs.get("root")
-            if pattern:
-                out.append({"tool": "search", "args": {"pattern": pattern, "path": path or str(default_cwd())}})
-        elif tag_l in {"shell", "bash"}:
-            cmd = attrs.get("cmd") or attrs.get("command")
-            if cmd and not shell_safety_error(cmd):
-                out.append({"tool": "shell", "args": {"cmd": cmd}})
-        elif tag_l in {"edit_file", "edit"}:
-            path = attrs.get("path") or attrs.get("file")
-            old = attrs.get("old")
-            new = attrs.get("new")
-            if path and old is not None and new is not None:
-                out.append({"tool": "edit", "args": {"path": path, "old": old, "new": new}})
+        call = _tool_call_from_parts(attrs.get("name") or attrs.get("tool") or "", {}, _xml_child_args(body))
+        if call:
+            out.append(call)
+        if len(out) >= limit:
+            return out
+    for attrs_raw, body in re.findall(r"<invoke\b([^>]*)>([\s\S]*?)</invoke>", raw_text, flags=re.I):
+        attrs = _xml_attrs(attrs_raw)
+        call = _tool_call_from_parts(attrs.get("name") or attrs.get("tool") or "", {}, _xml_child_args(body))
+        if call:
+            out.append(call)
+        if len(out) >= limit:
+            return out
+    tag_names = "read_file|read|search|grep|shell|bash|write|append|edit_file|edit"
+    for tag, attrs_raw, body in re.findall(rf"<({tag_names})\b([^>]*)>([\s\S]*?)</\1>", raw_text, flags=re.I):
+        attrs = _xml_attrs(attrs_raw)
+        call = _tool_call_from_parts(tag, attrs, _xml_child_args(body))
+        if call:
+            out.append(call)
+        if len(out) >= limit:
+            break
+    for tag, attrs_raw in re.findall(rf"<({tag_names})\b([^>]*)/>", raw_text, flags=re.I):
+        attrs = _xml_attrs(attrs_raw)
+        call = _tool_call_from_parts(tag, attrs, {})
+        if call:
+            out.append(call)
         if len(out) >= limit:
             break
     return out
@@ -531,7 +720,56 @@ def run_model_tool(call: dict, owner_text: str) -> dict:
     if tool == "edit":
         return edit_file(str(args.get("path") or ""), str(args.get("old") or ""), str(args.get("new") or ""),
                          owner_text=owner_text)
+    if tool == "show_image":
+        return show_image(str(args.get("path") or ""), str(args.get("caption") or ""))
+    if tool == "add_skill":
+        return add_skill(str(args.get("name") or ""), str(args.get("content") or ""))
     return {"ok": False, "tool": tool or "unknown", "error": "unknown tool"}
+
+
+def add_skill(name: str, content: str) -> dict:
+    """Create a new skill (a SKILL.md) in the persistent skills folder; auto-detected afterward."""
+    try:
+        from jarvis import skills as _skills_mod
+        res = _skills_mod.save_skill(name, content)
+        res.setdefault("tool", "add_skill")
+        return res
+    except Exception as e:
+        return {"ok": False, "tool": "add_skill", "error": str(e)[:300]}
+
+
+def show_image(path: str, caption: str = "") -> dict:
+    """Copy an existing local image into the dashboard's served uploads folder so it renders inline
+    in chat. Read-only w.r.t. the source; never executes anything. Returns markdown the reply embeds."""
+    import shutil
+    import uuid as _uuid
+
+    raw = (path or "").strip()
+    if not raw:
+        return {"ok": False, "tool": "show_image", "error": "missing image path"}
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = default_cwd() / p
+    try:
+        p = p.resolve()
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "tool": "show_image", "path": raw, "error": "image file not found"}
+        ext = p.suffix.lstrip(".").lower()
+        if ext not in IMAGE_EXTS:
+            return {"ok": False, "tool": "show_image", "path": raw,
+                    "error": f"not an image (.{ext}); supported: {', '.join(sorted(IMAGE_EXTS))}"}
+        if p.stat().st_size > MAX_IMAGE_BYTES:
+            return {"ok": False, "tool": "show_image", "path": raw,
+                    "error": f"image too large (> {MAX_IMAGE_BYTES // (1024 * 1024)}MB)"}
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        name = f"{_uuid.uuid4().hex[:12]}.{ext}"
+        shutil.copyfile(p, UPLOADS / name)
+        cap = (caption or "").strip() or "image"
+        url = f"/api/upload?f={name}"
+        return {"ok": True, "tool": "show_image", "path": raw, "file": name,
+                "url": url, "output": f"![{cap}]({url})"}
+    except Exception as e:
+        return {"ok": False, "tool": "show_image", "path": raw, "error": str(e)[:300]}
 
 
 def search(pattern: str, root: str | None = None) -> dict:
@@ -600,6 +838,14 @@ def format_result(result: dict) -> str:
         if result.get("ok"):
             return result.get("output") or "(no matches)"
         return f"(search failed: {result.get('error')})"
+    if tool == "show_image":
+        if result.get("ok"):
+            return result.get("output") or ""
+        return f"(could not show image: {result.get('error')})"
+    if tool == "add_skill":
+        if result.get("ok"):
+            return f"Saved skill '{result.get('name')}' ({result.get('path')}). It will be auto-detected from now on."
+        return f"(could not add skill: {result.get('error')})"
     if tool == "codex":
         if result.get("ok"):
             return result.get("output") or "(no output)"

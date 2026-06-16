@@ -137,12 +137,16 @@ class RoutingLLM:
             raise RuntimeError("empty response from HTTP backend")
         return (choices[0].get("message", {}).get("content") or "").strip()
 
-    def run_stream(self, role, prompt, on_delta, timeout=180, think=None, should_cancel=None, images=None):
+    def run_stream(self, role, prompt, on_delta, timeout=180, think=None, should_cancel=None, images=None,
+                   tools=None):
         """Stream a reply, emitting on_delta(kind, text) as deltas arrive — kind is 'thinking' (the
-        model's reasoning) or 'text' (the answer). Returns the full answer text. Streams via the claude
-        CLI (stream-json, with real thinking blocks) or an OpenAI-style HTTP SSE; backends that can't
-        stream degrade to one on_delta('text', whole answer). `think` forces a thinking level;
-        `should_cancel()` (if given) is polled to stop early (returns the partial)."""
+        model's reasoning), 'text' (the answer), or 'tool' (a COMPLETE structured tool call as a JSON
+        string {"name","arguments"} — OpenAI-style backends only). Returns the full answer text. Streams
+        via the claude CLI (stream-json, with real thinking blocks) or an OpenAI-style HTTP SSE; backends
+        that can't stream degrade to one on_delta('text', whole answer). `think` forces a thinking level;
+        `should_cancel()` (if given) is polled to stop early (returns the partial). `tools` (OpenAI
+        function specs) enables NATIVE structured tool-calling on HTTP backends — deterministic, instead
+        of scraping tool calls out of free text."""
         params = (self.params or {}).get(role) or {}
         if think:
             params = {**params, "thinking": think}
@@ -170,7 +174,7 @@ class RoutingLLM:
                 if backend == "claude" and not (isinstance(spec, dict) and spec.get("http")):
                     return self._stream_claude_cli(model, prompt, emit, timeout, params, should_cancel, images)
                 if isinstance(spec, dict) and spec.get("http") and spec.get("format") != "anthropic":
-                    return self._stream_http_openai(spec, model, prompt, emit, timeout, params, should_cancel, images)
+                    return self._stream_http_openai(spec, model, prompt, emit, timeout, params, should_cancel, images, tools)
                 out = self._invoke(backend, model, prompt, timeout, params)   # non-streamable -> one-shot
                 emit("text", out)
                 return out
@@ -197,59 +201,73 @@ class RoutingLLM:
             cmd += ["--input-format", "stream-json"]
         else:
             stdin_data = prompt
+        import threading
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True)
         p.stdin.write(stdin_data); p.stdin.close()
         full = ""
-        for line in p.stdout:
-            if should_cancel and should_cancel():        # interrupted -> stop now, keep partial
-                try: p.terminate()
-                except Exception: pass
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if ev.get("type") == "stream_event":
-                ev = ev.get("event", {})
-            t = ev.get("type")
-            if t == "content_block_delta":
-                d = ev.get("delta") or {}
-                if d.get("type") == "thinking_delta":
-                    th = d.get("thinking") or ""
-                    if th:
-                        on_delta("thinking", th)
-                elif d.get("type") == "text_delta":
-                    tx = d.get("text") or ""
-                    if tx:
-                        full += tx; on_delta("text", tx)
-            elif t == "assistant" and not full:              # non-partial fallback
-                msg = ev.get("message", {})
-                txt = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
-                if txt:
-                    full = txt; on_delta("text", txt)
-            elif t == "result" and not full:
-                r = ev.get("result") or ""
-                if r:
-                    full = r; on_delta("text", r)
+        # HARD wall-clock bound: `for line in p.stdout` blocks with no deadline, so a hung or very-slow
+        # CLI (extended thinking that never yields a final block) would freeze the chat thread forever
+        # and leave the message stuck streaming=True (the hanging cursor). A watchdog kills the process
+        # at `timeout`, which EOFs stdout and ends the loop with whatever partial we already streamed.
+        timed_out = {"v": False}
+        def _kill():
+            timed_out["v"] = True
+            try: p.kill()
+            except Exception: pass
+        killer = threading.Timer(max(5, timeout), _kill)
+        killer.daemon = True
+        killer.start()
         try:
-            p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            pass
+            for line in p.stdout:
+                if should_cancel and should_cancel():        # interrupted -> stop now, keep partial
+                    try: p.terminate()
+                    except Exception: pass
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                if ev.get("type") == "stream_event":
+                    ev = ev.get("event", {})
+                t = ev.get("type")
+                if t == "content_block_delta":
+                    d = ev.get("delta") or {}
+                    if d.get("type") == "thinking_delta":
+                        th = d.get("thinking") or ""
+                        if th:
+                            on_delta("thinking", th)
+                    elif d.get("type") == "text_delta":
+                        tx = d.get("text") or ""
+                        if tx:
+                            full += tx; on_delta("text", tx)
+                elif t == "assistant" and not full:              # non-partial fallback
+                    msg = ev.get("message", {})
+                    txt = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+                    if txt:
+                        full = txt; on_delta("text", txt)
+                elif t == "result" and not full:
+                    r = ev.get("result") or ""
+                    if r:
+                        full = r; on_delta("text", r)
         finally:
+            killer.cancel()
             if p.poll() is None:             # never leave an orphaned/stalled subprocess behind
                 try:
                     p.kill(); p.wait(timeout=5)
                 except Exception:
                     pass
+        # A timeout with NO output is a real failure (fail over); a timeout WITH partial text keeps it.
         if not full and not (should_cancel and should_cancel()):
-            raise RuntimeError("claude stream produced no text")
+            raise RuntimeError("claude stream timed out with no text" if timed_out["v"]
+                               else "claude stream produced no text")
         return full
 
-    def _stream_http_openai(self, spec, model, prompt, on_delta, timeout, params, should_cancel=None, images=None):
+    def _stream_http_openai(self, spec, model, prompt, on_delta, timeout, params, should_cancel=None,
+                            images=None, tools=None):
         key = os.environ.get(spec.get("api_key_env", ""), "")
         if images:                                           # vision models: OpenAI-style image_url blocks
             content = [{"type": "text", "text": prompt}]
@@ -260,6 +278,8 @@ class RoutingLLM:
         else:
             messages = [{"role": "user", "content": prompt}]
         payload = {"model": model, "messages": messages, "stream": True}
+        if tools:                                            # NATIVE structured tool-calling (deterministic)
+            payload["tools"] = tools
         effort = params.get("effort")
         if effort and effort != "default":
             payload["reasoning_effort"] = effort
@@ -268,6 +288,7 @@ class RoutingLLM:
             headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(spec["http"], data=json.dumps(payload).encode(), headers=headers)
         full = ""
+        tool_frags: dict = {}                                # index -> {"name","arguments"} (args stream in pieces)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             for raw in r:
                 if should_cancel and should_cancel():
@@ -290,9 +311,58 @@ class RoutingLLM:
                 d = delta.get("content") or ""
                 if d:
                     full += d; on_delta("text", d)
-        if not full and not (should_cancel and should_cancel()):
+                for tc in (delta.get("tool_calls") or []):   # assemble streamed function-call fragments
+                    idx = tc.get("index", 0)
+                    slot = tool_frags.setdefault(idx, {"name": "", "arguments": ""})
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        slot["arguments"] += fn["arguments"]
+        for idx in sorted(tool_frags):                       # emit each COMPLETE structured tool call
+            slot = tool_frags[idx]
+            if slot.get("name"):
+                on_delta("tool", json.dumps(slot))
+        if not full and not tool_frags and not (should_cancel and should_cancel()):
             raise RuntimeError("http stream produced no text")
         return full
+
+    def turn(self, role, prompt, *, tools=None, timeout=200, think=None,
+             should_cancel=None, images=None) -> dict:
+        """Provider-agnostic Brain.turn() — accumulates a full reply into
+        {text, thinking, tool_calls} without streaming to the UI.
+
+        HTTP backends return native structured tool_calls; CLI backends return text (text-recovery
+        in the caller). Use run_stream() when per-token SSE push is needed; use turn() for the
+        autonomous tick and any non-interactive tool loop."""
+        text_parts: list = []
+        thinking_parts: list = []
+        tool_calls: list = []  # raw JSON strings {"name": ..., "arguments": ...}
+
+        def on_delta(kind: str, d: str) -> None:
+            if kind == "text":
+                text_parts.append(d)
+            elif kind == "thinking":
+                thinking_parts.append(d)
+            elif kind == "tool":
+                tool_calls.append(d)
+
+        try:
+            self.run_stream(role, prompt, on_delta, timeout=timeout, think=think,
+                            should_cancel=should_cancel, images=images, tools=tools)
+        except Exception:
+            # non-streaming fallback for CLI backends that can't stream
+            try:
+                out = self.run(role, prompt, timeout=timeout)
+                text_parts.append(out)
+            except Exception:
+                pass
+
+        return {
+            "text": "".join(text_parts).strip(),
+            "thinking": "".join(thinking_parts),
+            "tool_calls": tool_calls,
+        }
 
     def run(self, role, prompt, timeout=120):
         params = (self.params or {}).get(role) or {}

@@ -88,7 +88,16 @@
   .composer-bar{ display:flex; align-items:center; justify-content:space-between; padding:4px 10px 8px; }
   .chips{ display:flex; gap:7px; align-items:center; }
   .chip{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; color:var(--dim); font-size:11px; }
+  .chip.editable{ cursor:pointer; } .chip.editable:hover{ border-color:#2c4a34; color:var(--txt); }
+  .chipcar{ font-size:9px; opacity:.7; }
   .cdot{ width:7px; height:7px; border-radius:50%; background:var(--grn); display:inline-block; }
+  .chippop{ position:absolute; bottom:100%; left:0; margin-bottom:8px; min-width:240px; max-width:420px; background:var(--panel,#11150f); border:1px solid var(--line); border-radius:10px; padding:10px 12px; box-shadow:0 6px 20px rgba(0,0,0,.45); z-index:20; }
+  .chippop .poprow{ display:flex; align-items:center; gap:8px; margin:6px 0; }
+  .chippop .poprow label{ color:var(--dim); font-size:11px; width:54px; flex:0 0 auto; }
+  .chippop select{ flex:1; background:#0c140d; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:4px 6px; font:inherit; font-size:12px; }
+  .chippop .popsave{ margin-top:8px; background:var(--grn); color:#04140a; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font:inherit; font-size:12px; }
+  .chippop .popnote{ color:var(--dim); font-size:10px; margin-top:6px; line-height:1.4; }
+  .chippop .popmsg{ color:var(--grntxt); font-size:11px; min-height:13px; }
   .sendbtn{ width:34px; height:34px; border-radius:50%; border:none; background:var(--grn); color:#04140a; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:0; box-shadow:0 1px 4px rgba(0,0,0,.35); transition:transform .08s ease, filter .12s ease, background .15s ease; }
   .sendbtn:hover{ filter:brightness(1.1); } .sendbtn:active{ transform:scale(.92); }
   .sendbtn svg{ display:block; }
@@ -99,7 +108,9 @@
   .attachstrip{ display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
   .thumb{ position:relative; display:inline-block; } .thumb img{ width:54px; height:54px; object-fit:cover; border-radius:8px; border:1px solid var(--line); display:block; }
   .thumb button{ position:absolute; top:-6px; right:-6px; background:var(--red); color:#fff; border:none; border-radius:50%; width:18px; height:18px; cursor:pointer; font-size:11px; line-height:1; padding:0; }
-  .msgimg{ max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); display:block; margin:4px 0; }
+  .msgimg{ max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); display:block; margin:4px 0; cursor:zoom-in; }
+  .lightbox{ position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; cursor:zoom-out; }
+  .lightbox img{ max-width:94vw; max-height:94vh; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,.6); }
   .slashmenu{ position:absolute; bottom:100%; left:0; margin-bottom:6px; min-width:300px; max-width:560px; background:var(--panel,#11150f); border:1px solid var(--line); border-radius:8px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.4); z-index:20; }
   .slashitem{ display:flex; gap:10px; align-items:baseline; padding:7px 12px; cursor:pointer; }
   .slashitem .sn{ color:var(--grntxt,#7ee2a8); font-family:monospace; } .slashitem .sd{ color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -181,7 +192,12 @@
   .skok{ color:var(--grntxt); font-size:12px; }
   .skerr{ color:#e88; font-size:11px; margin-top:8px; white-space:pre-wrap; font-family:monospace; }
   .beta{ background:var(--amber); color:#1a1206; font-size:9px; font-weight:700; letter-spacing:1.5px; padding:2px 6px; border-radius:4px; vertical-align:middle; margin-left:8px; }
-  #set-models .card, #set-routing .card, #set-behavior .card, #set-skills .card{ max-width:none; }
+  #set-models .card, #set-routing .card, #set-identity .card, #set-priorities .card,
+  #set-actions .card, #set-prompt .card, #set-system .card, #set-skills .card{ max-width:none; }
+  .subnav{ display:flex; gap:4px; padding:6px 26px 0; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; }
+  .subnav button{ background:none; border:none; color:var(--dim); padding:8px 14px; cursor:pointer; letter-spacing:1px; border-bottom:2px solid transparent; font:inherit; }
+  .subnav button.active{ color:var(--grntxt); border-bottom-color:var(--grn); }
+  .muted-seth{ color:var(--dim); }
 </style>
 </head>
 <body>
@@ -208,12 +224,15 @@
       <div id="chatlog"></div>
       <div class="composer">
         <div id="slashmenu" class="slashmenu" hidden></div>
+        <div id="chippop" class="chippop" hidden></div>
         <div id="attachstrip" class="attachstrip" hidden></div>
         <textarea id="sayinput" rows="1" autocomplete="off" placeholder="Ask anything…  ( / for skills, 📎 or paste an image )" oninput="onSayInput();autogrow(this)" onkeydown="sayKey(event)" onpaste="onPaste(event)"></textarea>
         <div class="composer-bar">
           <div class="chips">
-            <span class="chip"><span class="cdot"></span><span id="chip-model">brain</span></span>
-            <span class="chip" id="chip-mode">shadow</span>
+            <span class="chip editable" title="change model" onclick="openChipPop('model')"><span class="cdot"></span><span id="chip-model">brain</span> <span class="chipcar">▾</span></span>
+            <span class="chip editable" id="chip-effort" title="change effort/thinking" onclick="openChipPop('effort')" hidden></span>
+            <span class="chip" id="chip-ctx" title="conversation tokens / model context window" hidden></span>
+            <span class="chip editable" id="chip-mode" title="change autonomy mode" onclick="openChipPop('mode')">shadow</span>
           </div>
           <div class="composer-actions">
             <input type="file" id="fileinput" accept="image/*" multiple hidden onchange="onFiles(this.files);this.value=''"/>
@@ -239,17 +258,43 @@
     </div>
   </section>
   <section id="settings" hidden>
+    <!-- All settings inputs MUST stay inside #settings or the mid-edit guard in load() breaks
+         (it skips re-render only while document.activeElement is inside #settings). -->
+    <nav class="subnav" id="set-subnav">
+      <button type="button" id="stab-general"  class="active" onclick="showSet('general')">GENERAL</button>
+      <button type="button" id="stab-models"   onclick="showSet('models')">BRAIN &amp; MODELS</button>
+      <button type="button" id="stab-behavior" onclick="showSet('behavior')">BEHAVIOR</button>
+      <button type="button" id="stab-skills"   onclick="showSet('skills')">SKILLS</button>
+    </nav>
     <div class="page">
-      <h2 class="seth">Brain &amp; Models</h2>
-      <div class="setdesc">Connect a brain, then route each role to a model (effort/thinking where supported).</div>
-      <div id="set-models"></div>
-      <div id="set-routing"></div>
-      <h2 class="seth">Behavior</h2>
-      <div class="setdesc">Who Jarvis is and what it may do on its own.</div>
-      <div id="set-behavior"></div>
-      <h2 class="seth">Skills</h2>
-      <div class="setdesc">Shipped capabilities — install their dependencies with one click.</div>
-      <div id="set-skills"></div>
+      <div id="setpane-general" class="setpane">
+        <h2 class="seth">Identity</h2>
+        <div class="setdesc">Who Jarvis is and what matters most.</div>
+        <div id="set-identity"></div>
+        <div id="set-priorities"></div>
+        <h2 class="seth muted-seth">System (read-only)</h2>
+        <div class="setdesc">Live integrations Jarvis is wired to.</div>
+        <div id="set-system"></div>
+      </div>
+      <div id="setpane-models" class="setpane" hidden>
+        <h2 class="seth">Brain &amp; Models</h2>
+        <div class="setdesc">Connect a brain, then route each role to a model (effort/thinking where supported).</div>
+        <div id="set-models"></div>
+        <div id="set-routing"></div>
+      </div>
+      <div id="setpane-behavior" class="setpane" hidden>
+        <h2 class="seth">Autonomy</h2>
+        <div class="setdesc">What Jarvis may do on its own.</div>
+        <div id="set-actions"></div>
+        <h2 class="seth">Operating prompt</h2>
+        <div class="setdesc">The instructions sent with every message.</div>
+        <div id="set-prompt"></div>
+      </div>
+      <div id="setpane-skills" class="setpane" hidden>
+        <h2 class="seth">Skills</h2>
+        <div class="setdesc">Shipped capabilities — install their dependencies with one click.</div>
+        <div id="set-skills"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -259,9 +304,95 @@ function show(id){
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   const t=document.getElementById('tab-'+id); if(t) t.classList.add('active');
 }
+// Settings sub-tabs: toggle pane visibility only (never re-render — so it can't wipe typing and
+// stays independent of _cfgSig). All panes remain in the DOM; load() keeps repopulating them.
+function showSet(id){
+  for(const s of ['general','models','behavior','skills']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
+  for(const b of document.querySelectorAll('#set-subnav button')) b.classList.remove('active');
+  const t=document.getElementById('stab-'+id); if(t) t.classList.add('active');
+}
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0, _defaultSystemPrompt='';
+// composer context chip: detected window (from /api/model-info) + live token estimate of the convo
+let _miRoute=null, _ctxWindow=0;
+function fmtTok(n){ n=+n||0; if(n>=1e6) return (n/1e6).toFixed(n%1e6?1:0)+'M'; if(n>=1000) return Math.round(n/1000)+'K'; return ''+n; }
+function updateCtxChip(msgs){ const cc=document.getElementById('chip-ctx'); if(!cc) return;
+  if(!_ctxWindow){ cc.hidden=true; return; }
+  let used=0; for(const m of (msgs||[])) used+=((m.text||'').length+(m.thinking||'').length); used=Math.round(used/4);
+  cc.textContent='ctx ~'+fmtTok(used)+'/'+fmtTok(_ctxWindow); cc.hidden=false;
+}
+async function modelInfoFor(role,pool,model){
+  const qs=new URLSearchParams(); qs.set('role',role||'orchestrator');
+  if(pool) qs.set('pool',pool); if(model) qs.set('model',model);
+  return fetch('/api/model-info?'+qs.toString()).then(r=>r.json());
+}
+function controlValue(ctl,key,rp){
+  const opts=(ctl&&ctl.options)||['default']; let v=(rp&&rp[key])||(ctl&&ctl.value)||'default';
+  return opts.includes(v)?v:'default';
+}
+function controlSelect(id,label,ctl,key,rp){
+  if(!ctl||!ctl.supported) return '';
+  const opts=ctl.options||['default'], val=controlValue(ctl,key,rp);
+  return `<span class="rctl"><label>${label}</label><select id="${id}">`+
+    opts.map(o=>`<option${o===val?' selected':''}>${esc(o)}</option>`).join('')+`</select></span>`;
+}
+function reasoningChipText(mi){
+  const controls=(mi&&mi.controls)||{}, parts=[];
+  if(controls.effort&&controls.effort.supported) parts.push('effort: '+(controls.effort.value||'default'));
+  if(controls.thinking&&controls.thinking.supported) parts.push('thinking: '+(controls.thinking.value||'default'));
+  return parts.join(' · ');
+}
+function applyModelInfo(mi,msgs){
+  _ctxWindow=(mi&&mi.context_window)||0; updateCtxChip(msgs);
+  const ce=document.getElementById('chip-effort'); if(!ce) return;
+  const label=reasoningChipText(mi);
+  if(label){ ce.textContent=label; ce.hidden=false; }
+  else { ce.hidden=true; ce.textContent=''; }
+}
+// --- inline composer controls: change model / effort / mode without opening Settings ---
+function closeChipPop(){ const p=document.getElementById('chippop'); if(p){ p.hidden=true; p.innerHTML=''; p.dataset.kind=''; } }
+async function openChipPop(kind){
+  const pop=document.getElementById('chippop'); if(!pop) return;
+  if(!pop.hidden && pop.dataset.kind===kind){ closeChipPop(); return; }   // toggle off
+  await loadPools();
+  const cfg=await fetch('/api/config').then(r=>r.json()).then(j=>j.config||{}).catch(()=>({}));
+  const llm=cfg.llm||{}; const route=(llm.routing||{}).orchestrator||'';
+  const ci=route.indexOf(':'); const curPool=ci>=0?route.slice(0,ci):''; const curModel=ci>=0?route.slice(ci+1):route;
+  const params=((llm.params||{}).orchestrator)||{};
+  let html='';
+  if(kind==='model'){
+    const poolNames=((_pools&&_pools.pools)||[]).map(p=>p.name); const pools=[...new Set([curPool,...poolNames].filter(Boolean))];
+    const models=(poolMap()[curPool]||[]).slice(); if(curModel&&!models.includes(curModel)) models.unshift(curModel);
+    html='<div class="poprow"><label>pool</label><select id="pop-pool" onchange="popPoolChange()">'+pools.map(p=>`<option${p===curPool?' selected':''}>${esc(p)}</option>`).join('')+'</select></div>'
+        +'<div class="poprow"><label>model</label><select id="pop-model">'+models.map(m=>`<option${m===curModel?' selected':''}>${esc(m)}</option>`).join('')+'</select></div>'
+        +'<button type="button" class="popsave" onclick="saveChipModel()">Save</button>';
+  } else if(kind==='effort'){
+    const mi=await modelInfoFor('orchestrator',curPool,curModel), controls=(mi.controls||{}); let r='';
+    const effort=controls.effort||{}, thinking=controls.thinking||{};
+    if(effort.supported) r+='<div class="poprow"><label>effort</label><select id="pop-effort">'+(effort.options||['default']).map(o=>`<option${o===controlValue(effort,'effort',params)?' selected':''}>${esc(o)}</option>`).join('')+'</select></div>';
+    if(thinking.supported) r+='<div class="poprow"><label>thinking</label><select id="pop-think">'+(thinking.options||['default']).map(o=>`<option${o===controlValue(thinking,'thinking',params)?' selected':''}>${esc(o)}</option>`).join('')+'</select></div>';
+    html=(r||'<div class="popnote">This model exposes no effort/thinking control.</div>')+(r?'<button type="button" class="popsave" onclick="saveChipEffort()">Save</button>':'');
+  } else if(kind==='mode'){
+    const cur=(cfg.identity||{}).mode||'shadow';
+    html='<div class="poprow"><label>mode</label><select id="pop-mode">'+['shadow','active','autonomous'].map(o=>`<option${o===cur?' selected':''}>${o}</option>`).join('')+'</select></div>'
+        +'<div class="popnote">shadow = propose only · active = act on allowed classes · autonomous = full priority ladder</div>'
+        +'<button type="button" class="popsave" onclick="saveChipMode()">Save</button>';
+  }
+  pop.innerHTML='<div class="popmsg" id="pop-msg"></div>'+html; pop.dataset.kind=kind; pop.hidden=false;
+}
+function popPoolChange(){ const pool=document.getElementById('pop-pool').value; const ms=poolMap()[pool]||[];
+  const sel=document.getElementById('pop-model'); if(sel) sel.innerHTML=(ms.length?ms:['']).map(m=>`<option>${esc(m)}</option>`).join(''); }
+async function saveChip(patch){ const m=document.getElementById('pop-msg'); if(m){ m.textContent='saving…'; m.style.color='var(--dim)'; }
+  try{ const j=await fetch('/api/config-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}).then(r=>r.json());
+    if(m){ m.textContent=j.ok?'✓ saved':('✕ '+(j.error||'failed')); m.style.color=j.ok?'var(--grntxt)':'#e88'; }
+    if(j.ok){ _cfgSig=null; _miRoute=null; setTimeout(closeChipPop,700); load(); }
+  }catch(e){ if(m){ m.textContent='✕ '+e; m.style.color='#e88'; } } }
+function saveChipModel(){ const p=document.getElementById('pop-pool').value, mo=document.getElementById('pop-model').value; if(mo) saveChip({routing:{orchestrator:p+':'+mo}}); }
+function saveChipEffort(){ const e=document.getElementById('pop-effort'), t=document.getElementById('pop-think'); const p={}; if(e)p.effort=e.value; if(t)p.thinking=t.value; saveChip({params:{orchestrator:p}}); }
+function saveChipMode(){ saveChip({identity:{mode:document.getElementById('pop-mode').value}}); }
+document.addEventListener('click',e=>{ const pop=document.getElementById('chippop');
+  if(pop && !pop.hidden && !pop.contains(e.target) && !(e.target.closest&&e.target.closest('.chip.editable'))) closeChipPop(); });
 let _kwSig='', _cfgSig='', _chatSig='', _skSig='', _mdSig='', modelDraft={};
 let knowledgeCollapsed=(()=>{ try{return JSON.parse(localStorage.getItem('jarvisKnowledgeCollapsed')||'{}')}catch(e){return{}} })();
 function renderModels(list){
@@ -305,10 +436,17 @@ async function useMain(id){
 }
 function renderSkills(list){
   const el=document.getElementById('set-skills');
-  const sig=JSON.stringify((list||[]).map(s=>[s.name,s.installed,s.installing,s.install_error]));
+  list=list||[];
+  const sig=JSON.stringify(list.map(s=>[s.name,s.installed,s.installing,s.install_error]));
   if(sig===_skSig) return; _skSig=sig;
-  if(!list||!list.length){ el.innerHTML='<div class="empty">No skills found.</div>'; return; }
-  let h='';
+  let h='<div style="margin-bottom:12px"><button type="button" class="bigbtn" onclick="toggleAddSkill()">+ Add skill</button></div>'+
+    '<div id="addskill-form" class="card" hidden><h3>New skill</h3>'+
+    '<input id="addskill-name" placeholder="skill name (e.g. create-ad)" style="width:100%;box-sizing:border-box;margin-bottom:8px"/>'+
+    '<textarea id="addskill-content" rows="14" placeholder="Paste the SKILL.md text here.\n\n---\nname: create-ad\ndescription: what it does\nwhen_to_use: when the owner asks for an ad\n---\n\nSteps / instructions, and any script path to run." style="width:100%;box-sizing:border-box;font-family:monospace"></textarea>'+
+    '<div id="addskill-msg" style="margin-top:6px"></div>'+
+    '<div style="margin-top:10px"><button type="button" class="bigbtn" onclick="saveSkill()">Save</button> '+
+    '<button type="button" class="bigbtn" onclick="toggleAddSkill(false)">Cancel</button></div></div>';
+  if(!list.length){ h+='<div class="empty">No skills yet — add one with “+ Add skill”.</div>'; }
   for(const s of list){
     let btn;
     if(s.installing) btn='<button type="button" class="bigbtn" disabled>Installing…</button>';
@@ -321,6 +459,20 @@ function renderSkills(list){
        '<div style="margin-top:10px">'+btn+'</div>'+err+'</div>';
   }
   el.innerHTML=h;
+}
+function toggleAddSkill(show){ const f=document.getElementById('addskill-form'); if(!f)return; f.hidden=(show===false)?true:!f.hidden; if(!f.hidden){ const n=document.getElementById('addskill-name'); if(n) n.focus(); } }
+async function saveSkill(){
+  const name=(document.getElementById('addskill-name')||{}).value||'';
+  const content=(document.getElementById('addskill-content')||{}).value||'';
+  const msg=document.getElementById('addskill-msg');
+  if(!name.trim()||!content.trim()){ if(msg){msg.textContent='Name and skill text are both required.'; msg.style.color='#e88';} return; }
+  if(msg){ msg.textContent='Saving…'; msg.style.color='var(--dim)'; }
+  try{
+    const r=await fetch('/api/skills/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,content})});
+    const j=await r.json();
+    if(j.ok){ if(msg){msg.textContent='✓ saved as '+j.name; msg.style.color='var(--grntxt)';} _skSig=''; load(); setTimeout(()=>toggleAddSkill(false),900); }
+    else if(msg){ msg.textContent='✕ '+(j.error||'failed'); msg.style.color='#e88'; }
+  }catch(e){ if(msg){ msg.textContent='✕ '+e; msg.style.color='#e88'; } }
 }
 async function installSkill(name){
   await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
@@ -481,7 +633,10 @@ function md(t){
   const ft=()=>{ if(inTable){h+='<pre class="mdtable">'+esc(tbuf.join('\n'))+'</pre>';tbuf=[];inTable=false;} };
   for(const raw of lines){
     if(raw.trim().startsWith('|')){ inTable=true; tbuf.push(raw); continue; } ft();
-    const l=esc(raw).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+?)`/g,'<code>$1</code>')
+    const l=esc(raw)
+      // inline images — ONLY same-origin /api/upload srcs (no arbitrary remote/file URLs: XSS/exfil guard)
+      .replace(/!\[([^\]]*)\]\((\/api\/upload\?f=[^)\s]+)\)/g,'<img class="msgimg" src="$2" alt="$1"/>')
+      .replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+?)`/g,'<code>$1</code>')
       .replace(/\[([^\]]+)\]\(([^)]+\.md)\)/g,'<a class="mdlink" onclick="selectDocByName(\'$2\')">$1</a>');
     if(/^#### /.test(raw)){ fl(); h+='<h4>'+l.slice(5)+'</h4>'; }
     else if(/^### /.test(raw)){ fl(); h+='<h4>'+l.slice(4)+'</h4>'; }
@@ -742,6 +897,11 @@ async function load(){
   const orch=((c.llm||{}).routing||{}).orchestrator||'';
   const cm=document.getElementById('chip-model'); if(cm) cm.textContent=(orch.split(':')[1]||orch||'brain');
   const cmo=document.getElementById('chip-mode'); if(cmo) cmo.textContent=idn.mode||'shadow';
+  // effort/thinking chip and context chip from detected backend+model info, not raw stale config.
+  const op=((c.llm||{}).params||{}).orchestrator||{}; const miSig=orch+'|'+JSON.stringify(op);
+  if(miSig!==_miRoute){ _miRoute=miSig;
+    fetch('/api/model-info').then(r=>r.json()).then(mi=>applyModelInfo(mi,msgs)).catch(()=>{});
+  } else updateCtxChip(msgs);
   const csig=JSON.stringify(cfg.config||{});
   // Re-render only when the server config changed AND the owner isn't mid-edit (don't wipe typing).
   if(csig!==_cfgSig && !(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#settings'))){
@@ -765,6 +925,11 @@ async function load(){
     const rt=(c.llm||{}).routing||{}; const pr=(c.llm||{}).params||{};
     const roles=Object.keys(rt).length?Object.keys(rt):['triage','summarizer','researcher','orchestrator','red_team','fixer'];
     const poolNames=(_pools&&_pools.pools.length)?_pools.pools.map(p=>p.name):[...new Set(roles.map(r=>(rt[r]||'').split(':')[0]).filter(Boolean))];
+    const roleInfos={};
+    await Promise.all(roles.map(async role=>{
+      const cur=rt[role]||'', i=cur.indexOf(':'), pool=i>=0?cur.slice(0,i):(poolNames[0]||''), model=i>=0?cur.slice(i+1):'';
+      try{ roleInfos[role]=await modelInfoFor(role,pool,model); }catch(e){ roleInfos[role]=null; }
+    }));
     const roleRow=role=>{
       const cur=rt[role]||''; const i=cur.indexOf(':'); const curPool=i>=0?cur.slice(0,i):(poolNames[0]||''); const curModel=i>=0?cur.slice(i+1):'';
       // always include the configured pool, even if /api/pools is stale/missing it — otherwise the
@@ -772,7 +937,7 @@ async function load(){
       const pools=[...new Set([curPool,...poolNames].filter(Boolean))];
       const psel=`<select id="cf-pool-${role}" onchange="onPoolChange('${role}')">`+pools.map(p=>`<option${p===curPool?' selected':''}>${esc(p)}</option>`).join('')+`</select>`;
       return row(role,`<div class="poolrow">${psel}<span id="cf-modelwrap-${role}">${modelControl(role,curPool,curModel)}</span>`+
-        `<span id="cf-reason-${role}" class="reason">${reasonControls(role,curPool,pr[role]||{})}</span></div>`);
+        `<span id="cf-reason-${role}" class="reason">${reasonControls(role,curPool,curModel,pr[role]||{},roleInfos[role])}</span></div>`);
     };
     const rtCard=card('LLM ROUTING (role → pool → model)',
       '<div style="margin-bottom:10px"><button type="button" class="ghostbtn" onclick="refreshPools()">↻ refresh models</button>'+
@@ -789,11 +954,15 @@ async function load(){
 
     const kv=o=>'<div class="cfg">'+Object.entries(o||{}).map(([k,v])=>
        `<div class="k">${k}</div><pre>${typeof v==='object'?JSON.stringify(v,null,2):v}</pre>`).join('')+'</div>';
-    // Brain & Models section gets the routing card (below the connect cards); Behavior gets the rest.
-    const rEl=document.getElementById('set-routing'); if(rEl) rEl.innerHTML=rtCard;
-    const bEl=document.getElementById('set-behavior');
-    if(bEl) bEl.innerHTML = promptCard + idCard + acCard + prCard
-      + card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource}));
+    // Route each card to its settings sub-pane (same card variables, same input ids — so every
+    // save fn and the routing guard above keep working untouched; all stay inside #settings).
+    const set=(id,html)=>{ const e=document.getElementById(id); if(e) e.innerHTML=html; };
+    set('set-routing', rtCard);
+    set('set-identity', idCard);
+    set('set-priorities', prCard);
+    set('set-actions', acCard);
+    set('set-prompt', promptCard);
+    set('set-system', card('MEMORY / NOTIFIER / WORKSOURCE', kv({memory:c.memory,notifier:c.notifier,worksource:c.worksource})));
   }
   // procs
   const pb=document.getElementById('procs-body'); pb.innerHTML='';
@@ -823,7 +992,8 @@ function renderBody(m){
     const shownThought=visibleThinking(thinking);
     const activity=(m.streaming&&!shownThought)?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Working...')}</span></div>`:'';
     const visible=(bodyText||'').trim();
-    body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+
+    const jimgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
+    body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+jimgs+
          (m.streaming?'<span class="cursor">▌</span>':'');
   } else {
     const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
@@ -1043,19 +1213,19 @@ function onPoolChange(role){
   if(wrap) wrap.innerHTML=modelControl(role,pool,model);
   refreshReason(role);
 }
-// reasoning controls — capability comes from the POOL/backend kind (server /api/pools caps), not a
-// model-name guess, so DeepSeek via the OpenAI-style ollama_cloud backend correctly offers 'effort'.
-function poolCaps(){ const m={}; if(_pools)(_pools.pools||[]).forEach(p=>m[p.name]=p.caps||{}); return m; }
-function rsel(id,label,val,opts){ return `<span class="rctl"><label>${label}</label><select id="${id}">`+opts.map(o=>`<option${o===(val||'default')?' selected':''}>${o}</option>`).join('')+`</select></span>`; }
-function reasonControls(role,pool,rp){ rp=rp||{}; const c=poolCaps()[pool]||{}; let h='';
-  if(c.effort) h+=rsel('cf-effort-'+role,'effort',rp.effort,['default','minimal','low','medium','high']);
-  if(c.thinking) h+=rsel('cf-think-'+role,'thinking',rp.thinking,['default','low','medium','high','max']);
+// reasoning controls come from /api/model-info: pool first, then detected model capabilities.
+function reasonControls(role,pool,model,rp,mi){ rp=rp||{}; const controls=(mi&&mi.controls)||{}; let h='';
+  h+=controlSelect('cf-effort-'+role,'effort',controls.effort,'effort',rp);
+  h+=controlSelect('cf-think-'+role,'thinking',controls.thinking,'thinking',rp);
   return h; }
-function refreshReason(role){
+async function refreshReason(role){
   const pool=(document.getElementById('cf-pool-'+role)||{}).value||'';
+  const model=(document.getElementById('cf-model-'+role)||{}).value||'';
   const e=document.getElementById('cf-effort-'+role), t=document.getElementById('cf-think-'+role);
   const holder=document.getElementById('cf-reason-'+role);
-  if(holder) holder.innerHTML=reasonControls(role,pool,{effort:e&&e.value,thinking:t&&t.value});
+  if(holder) holder.innerHTML='<span class="cfgmsg">detecting…</span>';
+  let mi=null; try{ mi=await modelInfoFor(role,pool,model); }catch(err){}
+  if(holder) holder.innerHTML=reasonControls(role,pool,model,{effort:e&&e.value,thinking:t&&t.value},mi);
 }
 function saveRouting(){ const r={}, params={};
   document.querySelectorAll('[id^="cf-pool-"]').forEach(e=>{ const role=e.id.slice(8); const m=document.getElementById('cf-model-'+role); const model=m?m.value.trim():''; if(model) r[role]=e.value+':'+model;
@@ -1087,6 +1257,14 @@ function _tick(){
 }
 _tick();
 loadPools().then(()=>{ _cfgSig=null; load(); });   // detect models per pool, then re-render routing
+
+// Click any chat image to open it full-size; click the backdrop or press Esc to close. Delegated on
+// document so it keeps working across chat re-renders (innerHTML rebuilds the message nodes).
+function openLightbox(src){ const lb=document.getElementById('lightbox'); document.getElementById('lightbox-img').src=src; lb.hidden=false; }
+function closeLightbox(){ const lb=document.getElementById('lightbox'); lb.hidden=true; document.getElementById('lightbox-img').src=''; }
+document.addEventListener('click',e=>{ const t=e.target; if(t&&t.classList&&t.classList.contains('msgimg')&&t.src){ openLightbox(t.src); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ const lb=document.getElementById('lightbox'); if(lb&&!lb.hidden) closeLightbox(); } });
 </script>
+<div id="lightbox" class="lightbox" hidden onclick="closeLightbox()"><img id="lightbox-img" alt=""/></div>
 </body>
 </html>

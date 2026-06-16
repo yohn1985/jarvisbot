@@ -3,8 +3,8 @@ Description=Jarvis dashboard
 After=network-online.target
 [Service]
 Type=simple
-User=yohn
-Environment=PATH=/home/yohn/.local/bin:/home/yohn/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+User=jarvis
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 WorkingDirectory=/opt/jarvis
 ExecStart=/opt/jarvis/install.sh dashboard --host 0.0.0.0 --port 8787
 Restart=always
