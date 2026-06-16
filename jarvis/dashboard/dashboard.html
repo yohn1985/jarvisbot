@@ -113,7 +113,7 @@
   .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px 3px; background:transparent; }
   .codelang{ color:var(--dim); font-size:10px; letter-spacing:0; } .copybtn{ background:none; border:none; color:var(--dim); font-size:13px; padding:1px 5px; border-radius:3px; cursor:pointer; opacity:.75; }
   .copybtn:hover{ color:var(--txt); opacity:1; } .codeblk pre{ margin:0; padding:8px 12px 12px; max-height:360px; overflow:auto; background:#1b1e1c; } .codeblk code{ background:transparent; border:0; padding:0; color:#bdc7bd; font-size:12px; white-space:pre; line-height:1.5; }
-  .syn-key{ color:#2aa8ff; } .syn-def{ color:#ff5f6d; } .syn-fn{ color:#f2c66d; } .syn-str{ color:#7ed787; } .syn-num{ color:#e0a85c; } .syn-com{ color:#6f7e6b; font-style:italic; } .syn-dec{ color:#9e8cff; } .syn-type{ color:#ffb454; }
+  .syn-key{ color:#2aa8ff; } .syn-def{ color:#ff5f6d; } .syn-fn{ color:#f2c66d; } .syn-str{ color:#7ed787; } .syn-num{ color:#e0a85c; } .syn-com{ color:#6f7e6b; font-style:italic; } .syn-dec{ color:#9e8cff; } .syn-type{ color:#ffb454; } .syn-op{ color:#91a391; } .syn-attr{ color:#d19a66; }
   .thought{ margin:2px 0 8px; } .thtoggle{ display:inline-flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:2px 0; color:var(--dim); }
   .thdot{ width:8px; height:8px; border-radius:50%; background:var(--dim); display:inline-block; } .thlbl{ font-size:12px; color:var(--dim); } .thchev{ font-size:11px; color:var(--dim); }
   .thbody{ margin:6px 0 0 4px; padding-left:10px; border-left:2px solid var(--line); max-height:280px; overflow-y:auto; }
@@ -331,9 +331,62 @@ function codeBlockHTML(b){ const id='cb'+(_cbId++);
     `<button type="button" class="copybtn" title="Copy code" onclick="copyCode('${id}',this)">⧉</button></div>`+
     `<pre id="${id}"><code>${highlightCode(b.code,b.lang)}</code></pre></div>`; }
 function highlightCode(code,lang){
-  lang=(lang||'').toLowerCase();
-  if(['py','python','python3'].includes(lang)) return highlightPython(code||'');
-  return esc(code||'');
+  lang=normalizeLang(lang);
+  if(['py','python'].includes(lang)) return highlightPython(code||'');
+  if(['yaml','yml'].includes(lang)) return highlightYaml(code||'');
+  if(['json','jsonc'].includes(lang)) return highlightJson(code||'');
+  if(['html','xml','svg','vue','svelte'].includes(lang)) return highlightMarkup(code||'');
+  if(['css','scss','sass','less'].includes(lang)) return highlightCss(code||'');
+  if(['sh','bash','zsh','shell','fish','powershell','ps1','dockerfile','makefile'].includes(lang)) return highlightGeneric(code||'',shellKeywords);
+  if(['sql','pgsql','mysql'].includes(lang)) return highlightGeneric(code||'',sqlKeywords);
+  return highlightGeneric(code||'',codeKeywords);
+}
+function normalizeLang(lang){
+  lang=(lang||'').trim().toLowerCase();
+  const aliases={'python3':'python','py':'python','js':'javascript','jsx':'javascript','mjs':'javascript','cjs':'javascript',
+    'ts':'typescript','tsx':'typescript','yml':'yaml','docker-compose':'yaml','compose':'yaml',
+    'shell-session':'sh','console':'sh','terminal':'sh','cmd':'sh','bat':'sh','docker':'dockerfile',
+    'c++':'cpp','objective-c':'objc','objectivec':'objc','c#':'csharp','cs':'csharp','golang':'go',
+    'postgres':'pgsql','postgresql':'pgsql','md':'markdown'};
+  return aliases[lang]||lang;
+}
+const codeKeywords=new Set(('abstract as assert async await break case catch class const continue def defer delete do else enum export extends false finally fn for from func function global go if implements import in interface is lambda let match module mut namespace new nil null package pass private protected public raise return self static struct super switch this throw trait true try type typeof undef undefined union use var void while with yield '+
+  'bool boolean byte char decimal double float int integer long number object short string symbol uint ulong usize vec dict list map set tuple option result record').split(/\s+/));
+const shellKeywords=new Set('alias awk break case cat cd chmod chown command continue cp curl do done echo elif else env esac eval exec exit export false fi find for function grep if in jq kill let local ls mkdir mv printf pwd read readonly return rm rsync sed set shift source sudo tail tar test then trap true until while xargs yarn npm pnpm git docker kubectl systemctl journalctl'.split(/\s+/));
+const sqlKeywords=new Set('add all alter and as asc begin between by case check commit constraint create database default delete desc distinct drop else end exists false foreign from group having in index inner insert into is join key left like limit not null on or order outer primary references right rollback select set table then true union unique update values view when where'.split(/\s+/));
+function highlightGeneric(code,keywords){
+  keywords=keywords||codeKeywords;
+  return (code||'').split('\n').map(line=>highlightLine(line,keywords)).join('\n');
+}
+function highlightLine(line,keywords){
+  const out=[]; let i=0;
+  const push=(cls,s)=>out.push(cls?`<span class="${cls}">${esc(s)}</span>`:esc(s));
+  while(i<line.length){
+    const rest=line.slice(i);
+    const blockCom=rest.match(/^\/\*.*?\*\//);
+    if(blockCom){ push('syn-com',blockCom[0]); i+=blockCom[0].length; continue; }
+    const com=rest.match(/^(\/\/.*|#.*|--.*)/);
+    if(com){ push('syn-com',com[0]); break; }
+    const str=rest.match(/^(`[^`\\]*(?:\\.[^`\\]*)*`|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')/);
+    if(str){ push('syn-str',str[0]); i+=str[0].length; continue; }
+    const dec=rest.match(/^@[A-Za-z_][\w.-]*/);
+    if(dec){ push('syn-dec',dec[0]); i+=dec[0].length; continue; }
+    const num=rest.match(/^\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?)(?:[eE][+-]?\d+)?\b/);
+    if(num){ push('syn-num',num[0]); i+=num[0].length; continue; }
+    const word=rest.match(/^[A-Za-z_$][\w$-]*/);
+    if(word){
+      const w=word[0], next=line.slice(i+w.length).trimStart();
+      if(keywords.has(w)||keywords.has(w.toLowerCase())) push('syn-key',w);
+      else if(/^[A-Z][A-Za-z0-9_]*$/.test(w)) push('syn-type',w);
+      else if(next.startsWith('(')) push('syn-fn',w);
+      else push('',w);
+      i+=w.length; continue;
+    }
+    const op=rest.match(/^(=>|->|::|===|!==|==|!=|<=|>=|\|\||&&|[{}[\]().,:;=+\-*/%<>!&|?])/);
+    if(op){ push('syn-op',op[0]); i+=op[0].length; continue; }
+    push('',line[i]); i++;
+  }
+  return out.join('');
 }
 function highlightPython(code){
   const kws=new Set('False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '));
@@ -366,6 +419,48 @@ function highlightPython(code){
     return out.join('');
   }).join('\n');
 }
+function highlightYaml(code){
+  return (code||'').split('\n').map(line=>{
+    if(/^\s*(---|\.\.\.)\s*$/.test(line)) return `<span class="syn-dec">${esc(line)}</span>`;
+    const com=line.match(/^(\s*#.*)$/); if(com) return `<span class="syn-com">${esc(line)}</span>`;
+    const m=line.match(/^(\s*(?:-\s*)?)([A-Za-z0-9_.-]+)(\s*:)(.*)$/);
+    if(m) return esc(m[1])+`<span class="syn-def">${esc(m[2])}</span><span class="syn-op">${esc(m[3])}</span>`+highlightYamlValue(m[4]);
+    const item=line.match(/^(\s*-\s+)(.*)$/);
+    if(item) return esc(item[1])+highlightYamlValue(item[2]);
+    return highlightYamlValue(line);
+  }).join('\n');
+}
+function highlightYamlValue(value){
+  let h=esc(value||'');
+  h=h.replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g,'<span class="syn-str">$1</span>');
+  h=h.replace(/\b(true|false|null|yes|no|on|off)\b/gi,'<span class="syn-key">$1</span>');
+  h=h.replace(/\b(-?\d+(?:\.\d+)?)\b/g,'<span class="syn-num">$1</span>');
+  h=h.replace(/([&*][A-Za-z0-9_.-]+)/g,'<span class="syn-dec">$1</span>');
+  h=h.replace(/(^|\s)(#.*)$/,(m,a,b)=>`${a}<span class="syn-com">${b}</span>`);
+  return h;
+}
+function highlightJson(code){
+  return esc(code||'')
+    .replace(/(&quot;(?:\\.|[^&])*?&quot;)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
+    .replace(/(:\s*)(&quot;(?:\\.|[^&])*?&quot;)/g,'$1<span class="syn-str">$2</span>')
+    .replace(/\b(true|false|null)\b/g,'<span class="syn-key">$1</span>')
+    .replace(/\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g,'<span class="syn-num">$&</span>');
+}
+function highlightMarkup(code){
+  return esc(code||'')
+    .replace(/(&lt;!--[\s\S]*?--&gt;)/g,'<span class="syn-com">$1</span>')
+    .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g,'$1<span class="syn-key">$2</span>')
+    .replace(/\s([A-Za-z_:][-A-Za-z0-9_:.]*)(=)(&quot;.*?&quot;|&#39;.*?&#39;)/g,' <span class="syn-attr">$1</span><span class="syn-op">$2</span><span class="syn-str">$3</span>')
+    .replace(/(\/?&gt;)/g,'<span class="syn-op">$1</span>');
+}
+function highlightCss(code){
+  return esc(code||'')
+    .replace(/(\/\*[\s\S]*?\*\/)/g,'<span class="syn-com">$1</span>')
+    .replace(/([A-Za-z-]+)(\s*:)/g,'<span class="syn-def">$1</span><span class="syn-op">$2</span>')
+    .replace(/(#(?:[0-9a-fA-F]{3}){1,2}\b|[-+]?\d*\.?\d+(?:px|rem|em|%|vh|vw|s|ms)?\b)/g,'<span class="syn-num">$1</span>')
+    .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g,'<span class="syn-str">$1</span>')
+    .replace(/([{}();,>+~])/g,'<span class="syn-op">$1</span>');
+}
 function copyCode(id,btn){ const el=document.getElementById(id); if(!el)return; const txt=el.textContent;
   const done=()=>{ const o=btn.textContent; btn.textContent='✓'; setTimeout(()=>btn.textContent=o,1200); };
   if(navigator.clipboard&&navigator.clipboard.writeText&&window.isSecureContext){
@@ -379,7 +474,7 @@ function md(t){
   t=t||'';
   // pull fenced code blocks out first so ``` contents aren't markdown-processed (restored at the end)
   const blocks=[];
-  t=t.replace(/```(\w*)\n?([\s\S]*?)```/g,(m,lang,code)=>{ blocks.push({lang,code:code.replace(/\n+$/,'')}); return '@@CB'+(blocks.length-1)+'@@'; });
+  t=t.replace(/```([^\s`]*)\s*\n?([\s\S]*?)```/g,(m,lang,code)=>{ blocks.push({lang,code:code.replace(/\n+$/,'')}); return '@@CB'+(blocks.length-1)+'@@'; });
   const lines=t.split('\n'); let h='', inList=false, inTable=false, tbuf=[];
   const fl=()=>{ if(inList){h+='</ul>';inList=false;} };
   const ft=()=>{ if(inTable){h+='<pre class="mdtable">'+esc(tbuf.join('\n'))+'</pre>';tbuf=[];inTable=false;} };
@@ -715,7 +810,7 @@ async function load(){
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 // --- chat rendering, decoupled so streaming can update WITHOUT the heavy full-dashboard refresh ---
-let _chatIds='', _chatConv=null;
+let _chatIds='', _chatConv=null, _focusLatestTurn=false;
 function renderBody(m){
   const isJ=m.from==='jarvis', isQ=m.kind==='question';
   let body;
@@ -750,10 +845,11 @@ function renderChat(msgs){
       const tb=cl.querySelector('[data-mid="'+streamMsg.id+'"] .thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
       if(cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
       return; } }
-  const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,m.streaming?((m.text||'').length+'.'+(m.thinking||'').length+'.'+(m.evidence||'').length):0]))+'|'+brainChoice+'|'+
+  const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,(m.text||'').length,(m.thinking||'').length,(m.evidence||'').length,!!m.streaming]))+'|'+brainChoice+'|'+
     (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
   if(chatSig===_chatSig) return; _chatSig=chatSig; _chatIds=ids; _chatConv=activeConv;
   const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
+  const focusLatestTurn = _focusLatestTurn && msgs.length > 2; _focusLatestTurn=false;
   cl.innerHTML='';
   for(const m of msgs){
     const isJ=m.from==='jarvis', isQ=m.kind==='question'; const ts=(m.ts||'').replace('T',' ').slice(0,16);
@@ -765,7 +861,12 @@ function renderChat(msgs){
   }
   renderSetupCard(cl);
   cl.querySelectorAll('.thought .thbody:not([hidden])').forEach(b=>{ b.scrollTop=b.scrollHeight; });
-  if(nearBottom) cl.scrollTop = cl.scrollHeight;
+  if(focusLatestTurn){
+    const lastOwner=[...msgs].reverse().find(m=>m.from==='owner');
+    const target=lastOwner?[...cl.querySelectorAll('.row[data-mid]')].find(r=>r.dataset.mid===lastOwner.id):null;
+    if(target) cl.scrollTop=Math.max(0,target.offsetTop-cl.offsetTop-4);
+    else cl.scrollTop=cl.scrollHeight;
+  } else if(nearBottom) cl.scrollTop = cl.scrollHeight;
 }
 async function pollChat(){   // cheap fast-path: ONLY the messages endpoint (no pip-list/ps/etc.)
   if(!activeConv) return;
@@ -785,7 +886,7 @@ async function archiveConv(id,val){
   if(activeConv===id && val) activeConv=null;
   load();
 }
-function selectConv(id){ activeConv=id; load(); }
+function selectConv(id){ activeConv=id; _focusLatestTurn=true; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
 let _pending=[];   // attached images pending send: [{name, data(dataURL)}]
 function onFiles(files){
@@ -831,7 +932,7 @@ function openStream(conv){
   _sse.addEventListener('ping',()=>{});
   _sse.onerror=()=>endStream();   // fall back to polling (the reply is still persisted server-side)
 }
-function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; load(); }
+function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; _focusLatestTurn=true; load(); }
 function renderLive(){
   const cl=document.getElementById('chatlog'); if(!cl) return;
   let row=cl.querySelector('[data-mid="sse-live"]');
