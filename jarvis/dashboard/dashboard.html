@@ -926,6 +926,7 @@ async function say(){
   _fastUntil=Date.now()+90000;   // polling fallback if SSE is unavailable
   // optimistic owner bubble (immediate, with thumbnails); SSE drives the live reply
   const cl=document.getElementById('chatlog');
+  if(cl) cl.querySelectorAll('.turnspacer').forEach(e=>e.remove());
   const hadRows=cl?cl.querySelectorAll('.row[data-mid]').length:0;
   if(cl){ const ts=new Date().toISOString().replace('T',' ').slice(0,16);
     const thumbs=imgs.map(p=>`<img class="msgimg" src="${p.data}"/>`).join('');
