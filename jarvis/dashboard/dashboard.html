@@ -811,7 +811,7 @@ async function load(){
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 // --- chat rendering, decoupled so streaming can update WITHOUT the heavy full-dashboard refresh ---
-let _chatIds='', _chatConv=null, _focusLatestTurn=false;
+let _chatIds='', _chatConv=null, _focusLatestTurn=false, _preserveChatView=false;
 function renderBody(m){
   const isJ=m.from==='jarvis', isQ=m.kind==='question';
   let body;
@@ -850,6 +850,9 @@ function renderChat(msgs){
     (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
   if(chatSig===_chatSig) return; _chatSig=chatSig; _chatIds=ids; _chatConv=activeConv;
   const nearBottom = cl.scrollHeight - cl.scrollTop - cl.clientHeight < 120;
+  const preserveView = _preserveChatView && activeConv===_chatConv;
+  const oldTop = cl.scrollTop;
+  _preserveChatView=false;
   const focusLatestTurn = _focusLatestTurn && msgs.length > 2; _focusLatestTurn=false;
   cl.innerHTML='';
   for(const m of msgs){
@@ -863,7 +866,9 @@ function renderChat(msgs){
   renderSetupCard(cl);
   if(focusLatestTurn) cl.insertAdjacentHTML('beforeend','<div class="turnspacer" aria-hidden="true"></div>');
   cl.querySelectorAll('.thought .thbody:not([hidden])').forEach(b=>{ b.scrollTop=b.scrollHeight; });
-  if(focusLatestTurn){
+  if(preserveView){
+    cl.scrollTop=Math.min(Math.max(0,cl.scrollHeight-cl.clientHeight),oldTop);
+  } else if(focusLatestTurn){
     const lastOwner=[...msgs].reverse().find(m=>m.from==='owner');
     const target=lastOwner?[...cl.querySelectorAll('.row[data-mid]')].find(r=>r.dataset.mid===lastOwner.id):null;
     if(target){
@@ -937,7 +942,7 @@ function openStream(conv){
   _sse.addEventListener('ping',()=>{});
   _sse.onerror=()=>endStream();   // fall back to polling (the reply is still persisted server-side)
 }
-function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; _focusLatestTurn=true; load(); }
+function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; _preserveChatView=true; load(); }
 function renderLive(){
   const cl=document.getElementById('chatlog'); if(!cl) return;
   let row=cl.querySelector('[data-mid="sse-live"]');
