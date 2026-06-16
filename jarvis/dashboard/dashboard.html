@@ -811,7 +811,7 @@ async function load(){
   document.getElementById('upd').textContent=new Date().toLocaleTimeString();
 }
 // --- chat rendering, decoupled so streaming can update WITHOUT the heavy full-dashboard refresh ---
-let _chatIds='', _chatConv=null, _focusLatestTurn=false, _preserveChatView=false;
+let _chatIds='', _chatConv=null, _focusLatestTurn=false, _preserveChatView=false, _holdContextView=false;
 function renderBody(m){
   const isJ=m.from==='jarvis', isQ=m.kind==='question';
   let body;
@@ -844,7 +844,7 @@ function renderChat(msgs){
     const cell=cl.querySelector('[data-mid="'+streamMsg.id+'"] .msg');
     if(cell){ cell.innerHTML=renderBody(streamMsg);
       const tb=cl.querySelector('[data-mid="'+streamMsg.id+'"] .thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
-      if(!cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
+      if(!_holdContextView && !cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<160) cl.scrollTop=cl.scrollHeight;
       return; } }
   const chatSig=activeConv+'|'+JSON.stringify(msgs.map(m=>[m.id,m.answered,(m.text||'').length,(m.thinking||'').length,(m.evidence||'').length,!!m.streaming]))+'|'+brainChoice+'|'+
     (setupState?[setupState.complete,setupState.running,(setupState.plan||[]).map(a=>a.id).join(','),(setupState.needs_user||[]).map(n=>n.key).join(','),setupState.ollama_key_set].join(','):'');
@@ -898,6 +898,15 @@ async function archiveConv(id,val){
 }
 function selectConv(id){ activeConv=id; _focusLatestTurn=true; _chatSig=''; _chatIds=''; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
+function scrollToRecentContext(cl){
+  if(!cl) return false;
+  const rows=[...cl.querySelectorAll('.row[data-mid]')];
+  const owners=rows.filter(r=>r.classList.contains('orow'));
+  const target=owners[owners.length-1];
+  if(!target || rows.length<4) return false;
+  cl.scrollTop=Math.max(0,target.offsetTop-Math.round(cl.clientHeight*0.45));
+  return true;
+}
 let _pending=[];   // attached images pending send: [{name, data(dataURL)}]
 function onFiles(files){
   for(const f of [...files]){ if(!f.type||!f.type.startsWith('image/')) continue;
@@ -917,10 +926,12 @@ async function say(){
   _fastUntil=Date.now()+90000;   // polling fallback if SSE is unavailable
   // optimistic owner bubble (immediate, with thumbnails); SSE drives the live reply
   const cl=document.getElementById('chatlog');
+  const hadRows=cl?cl.querySelectorAll('.row[data-mid]').length:0;
   if(cl){ const ts=new Date().toISOString().replace('T',' ').slice(0,16);
     const thumbs=imgs.map(p=>`<img class="msgimg" src="${p.data}"/>`).join('');
     cl.insertAdjacentHTML('beforeend',`<div class="row orow"><div class="turnhead">You</div><div class="msg owner">${thumbs}${esc(v)}</div><div class="ts">${ts}</div></div>`);
-    cl.scrollTop=cl.scrollHeight; }
+    if(hadRows>=2) _holdContextView=scrollToRecentContext(cl);
+    else cl.scrollTop=cl.scrollHeight; }
   _pending=[]; renderAttach();
   const isSlash=v.startsWith('/');
   await fetch('/api/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:v,conv,images:imgs})});
@@ -942,7 +953,7 @@ function openStream(conv){
   _sse.addEventListener('ping',()=>{});
   _sse.onerror=()=>endStream();   // fall back to polling (the reply is still persisted server-side)
 }
-function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; _preserveChatView=true; load(); }
+function endStream(){ _sseActive=false; setStop(false); if(_sse){ try{_sse.close()}catch(e){} _sse=null; } _chatSig=''; _chatIds=''; _preserveChatView=true; _holdContextView=false; load(); }
 function renderLive(){
   const cl=document.getElementById('chatlog'); if(!cl) return;
   let row=cl.querySelector('[data-mid="sse-live"]');
@@ -950,7 +961,7 @@ function renderLive(){
   const m={id:'sse-live',from:'jarvis',thinking:_live.th,text:_live.tx,status:_live.status,streaming:true};
   row.querySelector('.msg').innerHTML=renderBody(m);
   const tb=row.querySelector('.thbody:not([hidden])'); if(tb) tb.scrollTop=tb.scrollHeight;
-  if(!cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
+  if(!_holdContextView && !cl.querySelector('.turnspacer') && cl.scrollHeight-cl.scrollTop-cl.clientHeight<220) cl.scrollTop=cl.scrollHeight;
 }
 function addLiveStep(text){
   text=(text||'').trim(); if(!text) return;
