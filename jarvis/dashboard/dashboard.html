@@ -891,7 +891,7 @@ async function archiveConv(id,val){
   if(activeConv===id && val) activeConv=null;
   load();
 }
-function selectConv(id){ activeConv=id; _focusLatestTurn=true; load(); }
+function selectConv(id){ activeConv=id; _focusLatestTurn=true; _chatSig=''; _chatIds=''; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }
 let _pending=[];   // attached images pending send: [{name, data(dataURL)}]
 function onFiles(files){
