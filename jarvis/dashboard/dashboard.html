@@ -864,7 +864,10 @@ function renderChat(msgs){
   if(focusLatestTurn){
     const lastOwner=[...msgs].reverse().find(m=>m.from==='owner');
     const target=lastOwner?[...cl.querySelectorAll('.row[data-mid]')].find(r=>r.dataset.mid===lastOwner.id):null;
-    if(target) cl.scrollTop=Math.max(0,target.offsetTop-cl.offsetTop-4);
+    if(target){
+      const cr=cl.getBoundingClientRect(), tr=target.getBoundingClientRect();
+      cl.scrollTop=Math.max(0,cl.scrollTop+(tr.top-cr.top)-8);
+    }
     else cl.scrollTop=cl.scrollHeight;
   } else if(nearBottom) cl.scrollTop = cl.scrollHeight;
 }
