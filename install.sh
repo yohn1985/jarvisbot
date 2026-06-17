@@ -695,6 +695,7 @@ case "${1:-up}" in
   run)      shift; "$(pybin)" "$ROOT/jarvis/loop.py" "$@";;     # persistent wake loop
   wake)     mkdir -p "$ROOT/state"; touch "$ROOT/state/wake"; log "wake marker set";;
   selfcheck) "$(pybin)" "$ROOT/jarvis/safety/fitness.py";;     # tamper-proof fitness score
+  test)     ( cd "$ROOT" && "$(pybin)" -m unittest discover -s tests -q );;   # run the suite (exit!=0 on failure)
   archive)  "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import snapshot,list_archive;print('snapshot:',snapshot('manual'));print('archive:',list_archive()[:5])";;
   rollback) "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import rollback;print('rolled back' if rollback('${2:-}') else 'failed')";;
   skill)    shift; skill_cmd "$@";;
@@ -702,5 +703,5 @@ case "${1:-up}" in
   url|login) login_banner "$(dash_url)" "$ROOT";;   # re-print the login link any time
   token)    cat "$ROOT/state/dashboard_token" 2>/dev/null || die "no token yet — run ./install.sh up";;
   doctor)   doctor;;
-  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|dashboard|doctor|install-service|uninstall [--purge])";;
+  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|test|selfcheck|dashboard|doctor|install-service|uninstall [--purge])";;
 esac
