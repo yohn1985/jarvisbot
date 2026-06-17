@@ -38,7 +38,9 @@
   textarea{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:8px 10px; border-radius:5px; font:inherit; }
   .cfgmsg{ margin-left:10px; font-size:.9em; }
   .poolrow{ display:flex; gap:8px; max-width:640px; flex-wrap:wrap; align-items:center; } .poolrow > select, .poolrow > input{ flex:1; min-width:90px; }
-  .reason{ display:flex; gap:8px; } .rctl{ display:flex; align-items:center; gap:4px; } .rctl label{ color:var(--dim); font-size:.82em; } .rctl select{ padding:5px 7px; }
+  .reason{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .rctl{ display:flex; align-items:center; gap:4px; } .rctl label{ color:var(--dim); font-size:.82em; } .rctl select{ padding:5px 7px; }
+  .ctxbadge{ color:var(--grntxt); background:var(--grnpill); border:1px solid #1d3a2a; border-radius:4px; padding:2px 7px; font-size:11px; letter-spacing:.3px; white-space:nowrap; }
+  .capbadge{ color:var(--dim); background:#0f140e; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font-size:10px; letter-spacing:.3px; }
   .ghostbtn{ background:transparent; color:var(--grntxt,#7ee2a8); border:1px solid var(--line); padding:5px 12px; border-radius:5px; cursor:pointer; font:inherit; }
   .card{ border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:14px; background:var(--panel); }
   .card h3{ margin:0 0 10px; color:var(--grntxt); font-size:12px; letter-spacing:1px; font-weight:600; }
@@ -1354,9 +1356,15 @@ function onPoolChange(role){
   refreshReason(role);
 }
 // reasoning controls come from /api/model-info: pool first, then detected model capabilities.
+function ctxLabel(n){ n=+n||0; if(n>=1e6) return (n/1e6).toFixed(n%1e6?1:0).replace(/\.0$/,'')+'M'; if(n>=1000) return Math.round(n/1000)+'K'; return ''+n; }
+function capsBadges(mi){ const caps=(mi&&mi.capabilities)||[]; const show=['tools','vision','thinking'].filter(c=>caps.includes(c));
+  return show.map(c=>`<span class="capbadge" title="model capability">${c}</span>`).join(''); }
 function reasonControls(role,pool,model,rp,mi){ rp=rp||{}; const controls=(mi&&mi.controls)||{}; let h='';
   h+=controlSelect('cf-effort-'+role,'effort',controls.effort,'effort',rp);
   h+=controlSelect('cf-think-'+role,'thinking',controls.thinking,'thinking',rp);
+  const win=(mi&&mi.context_window)||0;
+  if(win) h+=`<span class="ctxbadge" title="context window">${ctxLabel(win)} ctx</span>`;
+  h+=capsBadges(mi);
   return h; }
 async function refreshReason(role){
   const pool=(document.getElementById('cf-pool-'+role)||{}).value||'';
