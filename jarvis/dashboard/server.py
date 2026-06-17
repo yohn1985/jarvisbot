@@ -543,12 +543,26 @@ def _save_mcp(servers):
         args = s.get("args")
         if isinstance(args, str):
             args = [a for a in args.split() if a]      # accept a plain string from the UI
-        clean.append({
+        env = s.get("env")
+        if isinstance(env, str):                       # accept "KEY=VALUE" lines from the UI textarea
+            d = {}
+            for line in env.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip():
+                    d[k.strip()] = v.strip()
+            env = d
+        entry = {
             "name": str(s["name"]).strip(),
             "command": str(s["command"]).strip(),
             "args": [str(a) for a in (args or [])],
             "enabled": bool(s.get("enabled", True)),
-        })
+        }
+        if isinstance(env, dict) and env:              # store only secret REFERENCES (e.g. ${env:NAME})
+            entry["env"] = {str(k): str(v) for k, v in env.items()}
+        clean.append(entry)
     p = ROOT / "config.yaml"
     data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
     data.setdefault("mcp", {})["servers"] = clean

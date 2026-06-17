@@ -503,6 +503,7 @@ function mcpRowHTML(s){
     '<input class="mcp-name" placeholder="name (e.g. filesystem)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
     '<input class="mcp-cmd" placeholder="command (e.g. npx)" value="'+esc(s.command||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
     '<input class="mcp-args" placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)" value="'+esc((s.args||[]).join(' '))+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
+    '<textarea class="mcp-env" rows="2" placeholder="env — one KEY=VALUE per line. For secrets use a reference, NEVER the value:  META_ACCESS_TOKEN=${env:META_ACCESS_TOKEN}" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace">'+esc(Object.entries(s.env||{}).map(function(e){return e[0]+'='+e[1];}).join('\n'))+'</textarea>'+
     '<label style="display:inline-block;margin-right:12px"><input type="checkbox" class="mcp-enabled" '+(s.enabled===false?'':'checked')+'/> enabled</label>'+
     '<button type="button" class="bigbtn" onclick="this.closest(\'.mcp-row\').remove()">Remove</button>'+
     (status?'<div style="margin-top:6px">'+status+'</div>':'')+'</div>';
@@ -522,6 +523,7 @@ async function saveMcp(){
     name:r.querySelector('.mcp-name').value.trim(),
     command:r.querySelector('.mcp-cmd').value.trim(),
     args:r.querySelector('.mcp-args').value.trim(),
+    env:r.querySelector('.mcp-env').value,
     enabled:r.querySelector('.mcp-enabled').checked,
   })).filter(s=>s.name&&s.command);
   const msg=document.getElementById('mcp-msg'); if(msg){msg.textContent='Saving & reconnecting…'; msg.style.color='var(--dim)';}
