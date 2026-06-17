@@ -15,13 +15,20 @@ dispatcher can route a call back to the owning server.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets as _secrets
 import subprocess
 import threading
 import time
 import logging
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,13 @@ _PREFIX = "mcp__"
 _CONNECT_TIMEOUT = 20               # seconds to come up + handshake + list tools
 _CALL_TIMEOUT = 60                 # seconds for a single tools/call
 _MAX_RESULT = 16000                # cap tool output fed back to the model
+
+_ROOT = Path(__file__).resolve().parent.parent
+_AUTH_DIR = _ROOT / "state" / "mcp-auth"      # persisted OAuth tokens (chmod 600; NOT in config.yaml)
+# Default OAuth redirect = loopback, so the dashboard never needs to be exposed or have a cert.
+# The provider only redirects the BROWSER here; it never connects inbound. Override via mcp.oauth.
+_DEFAULT_REDIRECT = "http://127.0.0.1:8787/api/mcp/oauth/callback"
+_PENDING: dict[str, dict] = {}                # state -> in-flight auth (verifier, endpoints, ...)
 
 _CLIENTS: dict[str, "MCPClient"] = {}
 _LOCK = threading.RLock()
@@ -54,10 +68,89 @@ def servers_from_cfg(cfg: dict) -> list[dict]:
             continue
         if s.get("enabled") is False:
             continue
-        if not s.get("name") or not s.get("command"):
+        if not s.get("name") or not (s.get("command") or s.get("url")):
             continue
         out.append(s)
     return out
+
+
+def _redirect_uri(cfg: dict) -> str:
+    return str(((cfg or {}).get("mcp") or {}).get("oauth_redirect") or _DEFAULT_REDIRECT)
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _http(url: str, *, method: str = "GET", data=None, headers=None, timeout: int = 20):
+    """Minimal stdlib HTTP returning (status, headers_dict, parsed_json_or_text). Never raises on
+    HTTP error status — returns it so callers can branch (e.g. 401 -> needs auth)."""
+    body = None
+    hdrs = dict(headers or {})
+    if data is not None:
+        if isinstance(data, (dict, list)):
+            body = json.dumps(data).encode(); hdrs.setdefault("Content-Type", "application/json")
+        elif isinstance(data, str):
+            body = data.encode()
+        else:
+            body = data
+    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        raw = resp.read().decode("utf-8", "replace")
+        return resp.status, dict(resp.headers), _maybe_json(raw)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        return e.code, dict(e.headers or {}), _maybe_json(raw)
+    except Exception as e:
+        return 0, {}, str(e)
+
+
+def _maybe_json(raw: str):
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        # streamable-HTTP may answer a POST with SSE: pull the JSON out of the last data: line
+        for line in reversed(raw.splitlines()):
+            line = line.strip()
+            if line.startswith("data:"):
+                try:
+                    return json.loads(line[5:].strip())
+                except Exception:
+                    continue
+        return raw
+
+
+# -- OAuth token store (per server) ---------------------------------------
+def _tokens_path(name: str) -> Path:
+    return _AUTH_DIR / f"{_san(name)}.json"
+
+
+def _load_tokens(name: str) -> dict:
+    try:
+        return json.loads(_tokens_path(name).read_text())
+    except Exception:
+        return {}
+
+
+def _save_tokens(name: str, data: dict) -> None:
+    _AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    p = _tokens_path(name)
+    p.write_text(json.dumps(data, indent=2))
+    try:
+        os.chmod(p, 0o600)                          # tokens are secrets
+    except Exception:
+        pass
+
+
+def forget_auth(name: str) -> None:
+    try:
+        _tokens_path(name).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 class MCPClient:
@@ -222,13 +315,214 @@ class MCPClient:
                 pass
 
 
+class _AuthRequired(Exception):
+    pass
+
+
+def _discover_oauth(mcp_url: str, www_authenticate: str = "") -> dict:
+    """Discover the server's OAuth metadata: resource metadata (RFC 9728) -> authorization server
+    metadata (RFC 8414 / OIDC). Returns the auth-server metadata dict (authorization_endpoint,
+    token_endpoint, registration_endpoint, scopes_supported)."""
+    parsed = urllib.parse.urlparse(mcp_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    auth_servers = []
+    m = re.search(r'resource_metadata="?([^",\s]+)"?', www_authenticate or "")
+    for prm in ([m.group(1)] if m else []) + [origin + "/.well-known/oauth-protected-resource"]:
+        st, _h, j = _http(prm, timeout=15)
+        if isinstance(j, dict) and j.get("authorization_servers"):
+            auth_servers = j["authorization_servers"]; break
+    auth_base = (auth_servers[0] if auth_servers else origin).rstrip("/")
+    for wk in ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"):
+        st, _h, j = _http(auth_base + wk, timeout=15)
+        if isinstance(j, dict) and j.get("authorization_endpoint") and j.get("token_endpoint"):
+            return j
+    return {}
+
+
+def _register_client(meta: dict, redirect_uri: str) -> dict:
+    """Dynamic client registration (RFC 7591) — so there's no manual developer-app setup."""
+    reg = meta.get("registration_endpoint")
+    if not reg:
+        return {}
+    st, _h, j = _http(reg, method="POST", timeout=20, data={
+        "client_name": "Jarvis", "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"], "token_endpoint_auth_method": "none",
+    })
+    if isinstance(j, dict) and j.get("client_id"):
+        return {"client_id": j["client_id"], "client_secret": j.get("client_secret", "")}
+    return {}
+
+
+def begin_auth(cfg: dict, name: str) -> dict:
+    """Start the OAuth Connect flow for an http MCP server: discover, register, build the authorize
+    URL (PKCE). The dashboard opens that URL; the provider redirects the BROWSER back to the loopback
+    callback. Returns {ok, authorize_url}."""
+    raw = ((cfg.get("mcp") or {}).get("servers")) or []
+    spec = next((s for s in raw if _san(s.get("name")) == _san(name)), None)
+    if not spec or not spec.get("url"):
+        return {"ok": False, "error": "not an HTTP MCP server"}
+    url = spec["url"]; redirect = _redirect_uri(cfg)
+    st, hdrs, _b = _http(url, method="POST", timeout=15, headers={"Accept": "application/json, text/event-stream"},
+                         data={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                               "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                                          "clientInfo": {"name": "jarvis", "version": "1"}}})
+    meta = _discover_oauth(url, hdrs.get("WWW-Authenticate", "") if st == 401 else "")
+    if not meta.get("authorization_endpoint") or not meta.get("token_endpoint"):
+        return {"ok": False, "error": "could not discover the server's OAuth endpoints"}
+    saved = _load_tokens(name)
+    client = {"client_id": saved.get("client_id"), "client_secret": saved.get("client_secret", "")}
+    if not client["client_id"]:
+        client = _register_client(meta, redirect)
+    if not client.get("client_id"):
+        return {"ok": False, "error": "this server requires manual app registration (no dynamic registration)"}
+    verifier = _b64url(_secrets.token_bytes(48))
+    challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
+    state = _b64url(_secrets.token_bytes(24))
+    params = {"response_type": "code", "client_id": client["client_id"], "redirect_uri": redirect,
+              "code_challenge": challenge, "code_challenge_method": "S256", "state": state, "resource": url}
+    scope = spec.get("scope") or " ".join(meta.get("scopes_supported") or [])
+    if scope:
+        params["scope"] = scope
+    sep = "&" if "?" in meta["authorization_endpoint"] else "?"
+    authorize_url = meta["authorization_endpoint"] + sep + urllib.parse.urlencode(params)
+    _PENDING[state] = {"name": name, "verifier": verifier, "redirect": redirect,
+                       "token_endpoint": meta["token_endpoint"], "client": client, "resource": url}
+    saved.update({"client_id": client["client_id"], "client_secret": client.get("client_secret", "")})
+    _save_tokens(name, saved)
+    return {"ok": True, "authorize_url": authorize_url}
+
+
+def complete_auth(state: str, code: str) -> dict:
+    """Handle the loopback callback: exchange the code (+PKCE verifier) for tokens and persist them."""
+    p = _PENDING.pop(str(state), None)
+    if not p:
+        return {"ok": False, "error": "unknown or expired auth state"}
+    data = {"grant_type": "authorization_code", "code": code, "redirect_uri": p["redirect"],
+            "client_id": p["client"]["client_id"], "code_verifier": p["verifier"], "resource": p["resource"]}
+    if p["client"].get("client_secret"):
+        data["client_secret"] = p["client"]["client_secret"]
+    st, _h, j = _http(p["token_endpoint"], method="POST", timeout=20,
+                      data=urllib.parse.urlencode(data),
+                      headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    if not isinstance(j, dict) or not j.get("access_token"):
+        return {"ok": False, "error": f"token exchange failed (HTTP {st})"}
+    saved = _load_tokens(p["name"])
+    saved.update({"client_id": p["client"]["client_id"], "client_secret": p["client"].get("client_secret", ""),
+                  "access_token": j["access_token"], "expires_at": time.time() + int(j.get("expires_in", 3600)),
+                  "refresh_token": j.get("refresh_token", saved.get("refresh_token", "")),
+                  "token_endpoint": p["token_endpoint"], "resource": p["resource"]})
+    _save_tokens(p["name"], saved)
+    with _LOCK:
+        _CLIENTS.pop(_san(p["name"]), None)        # drop cache so it reconnects with the token
+    return {"ok": True, "name": p["name"]}
+
+
+class MCPHttpClient:
+    """A remote MCP server over streamable HTTP (JSON-RPC POST; json or SSE responses). OAuth Bearer
+    is attached from the persisted token store and auto-refreshed. Same interface as MCPClient."""
+
+    def __init__(self, spec: dict) -> None:
+        self.name = _san(spec.get("name"))
+        self.url = spec.get("url")
+        self.spec = spec
+        self.tools: list[dict] = []
+        self.error = ""
+        self.needs_auth = False
+        self.session = ""
+        self._id = 0
+
+    def _token(self) -> str:
+        t = _load_tokens(self.name)
+        if not t.get("access_token"):
+            return ""
+        if t.get("expires_at") and time.time() > float(t["expires_at"]) - 60:
+            self._refresh(t)
+            t = _load_tokens(self.name)
+        return t.get("access_token", "")
+
+    def _refresh(self, t: dict) -> None:
+        if not (t.get("refresh_token") and t.get("token_endpoint")):
+            return
+        data = {"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": t.get("client_id", "")}
+        if t.get("client_secret"):
+            data["client_secret"] = t["client_secret"]
+        if t.get("resource"):
+            data["resource"] = t["resource"]
+        st, _h, j = _http(t["token_endpoint"], method="POST", timeout=20, data=urllib.parse.urlencode(data),
+                          headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+        if isinstance(j, dict) and j.get("access_token"):
+            t["access_token"] = j["access_token"]; t["expires_at"] = time.time() + int(j.get("expires_in", 3600))
+            if j.get("refresh_token"):
+                t["refresh_token"] = j["refresh_token"]
+            _save_tokens(self.name, t)
+
+    def _rpc(self, method: str, params, timeout: float, notify: bool = False):
+        self._id += 1
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        if not notify:
+            msg["id"] = self._id
+        hdrs = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": PROTOCOL_VERSION}
+        tok = self._token()
+        if tok:
+            hdrs["Authorization"] = f"Bearer {tok}"
+        if self.session:
+            hdrs["Mcp-Session-Id"] = self.session
+        st, rh, j = _http(self.url, method="POST", data=msg, headers=hdrs, timeout=timeout)
+        if st == 401:
+            raise _AuthRequired(rh.get("WWW-Authenticate", ""))
+        sid = rh.get("Mcp-Session-Id")
+        if sid:
+            self.session = sid
+        if notify:
+            return {}
+        if isinstance(j, dict) and isinstance(j.get("error"), dict):
+            raise RuntimeError(str(j["error"].get("message"))[:200])
+        return (j.get("result") or {}) if isinstance(j, dict) else {}
+
+    def connect(self) -> bool:
+        with _LOCK:
+            if self.tools:
+                return True
+            try:
+                self._rpc("initialize", {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                                         "clientInfo": {"name": "jarvis", "version": "1"}}, timeout=_CONNECT_TIMEOUT)
+                self._rpc("notifications/initialized", {}, timeout=_CONNECT_TIMEOUT, notify=True)
+                listed = self._rpc("tools/list", {}, timeout=_CONNECT_TIMEOUT)
+                self.tools = [t for t in (listed.get("tools") or []) if t.get("name")]
+                self.needs_auth = False; self.error = ""
+                return True
+            except _AuthRequired:
+                self.needs_auth = True; self.error = "not connected — click Connect to authorize"
+                return False
+            except Exception as e:
+                self.error = str(e)[:200]
+                return False
+
+    def call_tool(self, tool: str, arguments: dict) -> dict:
+        if not self.connect():
+            return {"ok": False, "error": self.error or "mcp server unavailable"}
+        try:
+            res = self._rpc("tools/call", {"name": tool, "arguments": arguments or {}}, timeout=_CALL_TIMEOUT)
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+        parts = [str(b.get("text") or "") for b in (res.get("content") or [])
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return {"ok": not res.get("isError"), "text": "\n".join(p for p in parts if p)[:_MAX_RESULT]}
+
+    def close(self) -> None:
+        pass
+
+
 # -- module-level manager (cached clients per process) --------------------
-def _client(spec: dict) -> "MCPClient":
+def _client(spec: dict):
     name = _san(spec.get("name"))
     with _LOCK:
         c = _CLIENTS.get(name)
         if c is None:
-            c = MCPClient(spec)
+            c = MCPHttpClient(spec) if spec.get("url") else MCPClient(spec)
             _CLIENTS[name] = c
         return c
 
@@ -300,7 +594,10 @@ def probe(cfg: dict) -> list[dict]:
             "name": c.name,
             "command": spec.get("command"),
             "args": spec.get("args") or [],
+            "url": spec.get("url"),
+            "transport": "http" if spec.get("url") else "stdio",
             "connected": ok,
+            "needs_auth": getattr(c, "needs_auth", False),
             "error": c.error,
             "tools": [t.get("name") for t in c.tools] if ok else [],
         })

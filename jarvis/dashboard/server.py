@@ -538,8 +538,10 @@ def _save_mcp(servers):
         return {"ok": False, "error": "servers must be a list"}
     clean = []
     for s in servers:
-        if not isinstance(s, dict) or not str(s.get("name") or "").strip() or not str(s.get("command") or "").strip():
+        if not isinstance(s, dict) or not str(s.get("name") or "").strip():
             continue
+        if not (str(s.get("command") or "").strip() or str(s.get("url") or "").strip()):
+            continue                                   # a server is either stdio (command) or http (url)
         args = s.get("args")
         if isinstance(args, str):
             args = [a for a in args.split() if a]      # accept a plain string from the UI
@@ -554,12 +556,14 @@ def _save_mcp(servers):
                 if k.strip():
                     d[k.strip()] = v.strip()
             env = d
-        entry = {
-            "name": str(s["name"]).strip(),
-            "command": str(s["command"]).strip(),
-            "args": [str(a) for a in (args or [])],
-            "enabled": bool(s.get("enabled", True)),
-        }
+        entry = {"name": str(s["name"]).strip(), "enabled": bool(s.get("enabled", True))}
+        if str(s.get("url") or "").strip():            # HTTP MCP server (OAuth Connect flow)
+            entry["url"] = str(s["url"]).strip()
+            if str(s.get("scope") or "").strip():
+                entry["scope"] = str(s["scope"]).strip()
+        else:                                          # stdio MCP server (command + args)
+            entry["command"] = str(s["command"]).strip()
+            entry["args"] = [str(a) for a in (args or [])]
         if isinstance(env, dict) and env:              # store only secret REFERENCES (e.g. ${env:NAME})
             entry["env"] = {str(k): str(v) for k, v in env.items()}
         clean.append(entry)
@@ -1424,6 +1428,27 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _mcp_oauth_callback(self, u):
+        """Loopback OAuth redirect target: exchange the code for tokens (validated by `state`)."""
+        q = parse_qs(u.query)
+        def _h(s):
+            return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        def _page(color, msg):
+            return ("<html><body style='font-family:system-ui;background:#0c0f0d;color:" + color +
+                    ";padding:48px;font-size:16px'>" + msg +
+                    "<p style='color:#6f7e6b'>You can close this tab and return to Jarvis.</p></body></html>")
+        err = (q.get("error") or [""])[0]
+        if err:
+            return self._send(200, _page("#d85a5a", "Authorization was declined: " + _h(err)), "text/html")
+        try:
+            from jarvis import mcp
+            res = mcp.complete_auth((q.get("state") or [""])[0], (q.get("code") or [""])[0])
+        except Exception as e:
+            res = {"ok": False, "error": str(e)[:200]}
+        if res.get("ok"):
+            return self._send(200, _page("#7fe39a", "✓ Connected <b>" + _h(res.get("name", "")) + "</b>."), "text/html")
+        return self._send(200, _page("#d85a5a", "Connection failed: " + _h(res.get("error", "unknown"))), "text/html")
+
     def _authed(self, u):
         """'query' if a valid ?token=, 'cookie' if a valid jarvis_token cookie, else None."""
         tok = _dash_token()
@@ -1439,6 +1464,10 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api/mcp/oauth/callback":
+            # The OAuth provider redirects the BROWSER here without the dashboard token, so this one
+            # path bypasses dashboard auth — it's protected instead by the secret `state` it must carry.
+            return self._mcp_oauth_callback(u)
         auth = self._authed(u)
         if not auth:
             if u.path.startswith("/api/"):
@@ -1521,6 +1550,21 @@ class H(BaseHTTPRequestHandler):
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}))
         if u.path == "/api/mcp/save":
             return self._send(200, json.dumps(_save_mcp(body.get("servers"))))
+        if u.path == "/api/mcp/connect":
+            try:
+                from jarvis.config import load
+                from jarvis import mcp
+                return self._send(200, json.dumps(mcp.begin_auth(load(), (body.get("name") or "").strip())))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
+        if u.path == "/api/mcp/disconnect":
+            try:
+                from jarvis import mcp
+                name = (body.get("name") or "").strip()
+                mcp.forget_auth(name); mcp.shutdown()
+                return self._send(200, json.dumps({"ok": True}))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
         if u.path == "/api/reindex":
             try:
                 from jarvis.config import load

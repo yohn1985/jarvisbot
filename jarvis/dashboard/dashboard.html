@@ -501,18 +501,41 @@ async function loadMcp(){
 }
 function _mcpStatusFor(name){ return (_mcpData.servers||[]).find(s=>s.name===name)||null; }
 function mcpRowHTML(s){
-  s=s||{}; const st=_mcpStatusFor(s.name); let status='';
-  if(st){ status=st.connected
-      ? '<span class="skok">✓ connected — '+(st.tools||[]).length+' tool(s): '+esc((st.tools||[]).join(', '))+'</span>'
-      : '<span class="skerr">✕ '+esc(st.error||'not connected')+'</span>'; }
+  s=s||{}; const st=_mcpStatusFor(s.name); let status=''; let connectBtn='';
+  if(st){
+    if(st.connected) status='<span class="skok">✓ connected — '+(st.tools||[]).length+' tool(s): '+esc((st.tools||[]).join(', '))+'</span>';
+    else if(st.needs_auth) status='<span class="skerr">needs authorization</span>';
+    else status='<span class="skerr">✕ '+esc(st.error||'not connected')+'</span>';
+  }
+  // Remote (http) servers use the OAuth Connect flow; show Connect when not yet authorized, else Reconnect.
+  if(s.url){
+    connectBtn = (st&&st.connected)
+      ? '<button type="button" class="bigbtn" onclick="mcpDisconnect(\''+esc(s.name)+'\')">Reconnect</button>'
+      : '<button type="button" class="bigbtn" onclick="mcpConnect(\''+esc(s.name)+'\')">Connect</button>';
+  }
   return '<div class="card mcp-row">'+
-    '<input class="mcp-name" placeholder="name (e.g. filesystem)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
-    '<input class="mcp-cmd" placeholder="command (e.g. npx)" value="'+esc(s.command||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
-    '<input class="mcp-args" placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)" value="'+esc((s.args||[]).join(' '))+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
+    '<input class="mcp-name" placeholder="name (e.g. filesystem, facebook)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-url" placeholder="remote MCP url (https://… — uses the Connect/OAuth flow). Leave blank for a local server." value="'+esc(s.url||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
+    '<input class="mcp-cmd" placeholder="OR local command (e.g. npx)" value="'+esc(s.command||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-args" placeholder="local args (space-separated)" value="'+esc((s.args||[]).join(' '))+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
     '<textarea class="mcp-env" rows="2" placeholder="env — one KEY=VALUE per line. For secrets use a reference, NEVER the value:  META_ACCESS_TOKEN=${env:META_ACCESS_TOKEN}" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace">'+esc(Object.entries(s.env||{}).map(function(e){return e[0]+'='+e[1];}).join('\n'))+'</textarea>'+
     '<label style="display:inline-block;margin-right:12px"><input type="checkbox" class="mcp-enabled" '+(s.enabled===false?'':'checked')+'/> enabled</label>'+
+    connectBtn+' '+
     '<button type="button" class="bigbtn" onclick="this.closest(\'.mcp-row\').remove()">Remove</button>'+
     (status?'<div style="margin-top:6px">'+status+'</div>':'')+'</div>';
+}
+async function mcpConnect(name){
+  const msg=document.getElementById('mcp-msg'); if(msg){msg.textContent='Starting authorization for '+name+'…'; msg.style.color='var(--dim)';}
+  try{
+    const r=await fetch('/api/mcp/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const j=await r.json();
+    if(j.ok&&j.authorize_url){ window.open(j.authorize_url,'_blank'); if(msg){msg.innerHTML='Opened the provider login in a new tab. After you approve, click <b>Save &amp; reconnect</b> (or reopen this tab) to refresh status.'; msg.style.color='var(--grntxt)';} }
+    else if(msg){ msg.textContent='✕ '+(j.error||'could not start authorization'); msg.style.color='#e88'; }
+  }catch(e){ if(msg){ msg.textContent='✕ '+e; msg.style.color='#e88'; } }
+}
+async function mcpDisconnect(name){
+  await fetch('/api/mcp/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  loadMcp();
 }
 function renderMcp(){
   const el=document.getElementById('set-mcp'); if(!el) return;
@@ -527,11 +550,12 @@ function mcpAddRow(){ const c=document.getElementById('mcp-rows'); if(c) c.inser
 async function saveMcp(){
   const rows=[...document.querySelectorAll('#mcp-rows .mcp-row')].map(r=>({
     name:r.querySelector('.mcp-name').value.trim(),
+    url:r.querySelector('.mcp-url').value.trim(),
     command:r.querySelector('.mcp-cmd').value.trim(),
     args:r.querySelector('.mcp-args').value.trim(),
     env:r.querySelector('.mcp-env').value,
     enabled:r.querySelector('.mcp-enabled').checked,
-  })).filter(s=>s.name&&s.command);
+  })).filter(s=>s.name&&(s.url||s.command));
   const msg=document.getElementById('mcp-msg'); if(msg){msg.textContent='Saving & reconnecting…'; msg.style.color='var(--dim)';}
   try{
     const r=await fetch('/api/mcp/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({servers:rows})});
