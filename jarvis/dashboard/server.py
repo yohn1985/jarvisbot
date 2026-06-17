@@ -293,8 +293,12 @@ def _model_info(role="orchestrator", route: str | None = None,
         chosen_ctx = int(params.get("context") or 0)
     except (TypeError, ValueError):
         chosen_ctx = 0
-    if chosen_ctx not in ctx_options:                                        # default to the model's max
-        chosen_ctx = ctx_options[-1] if ctx_options else info["context_window"]
+    if chosen_ctx not in ctx_options:
+        # Default to the model's STANDARD window, not the largest option: claude's 1M needs paid usage
+        # credits, so 200K (the detected window) is the safe default; for ollama the detected window IS
+        # the max, so this also defaults ollama to its full size.
+        default_ctx = info["context_window"]
+        chosen_ctx = default_ctx if default_ctx in ctx_options else (ctx_options[-1] if ctx_options else default_ctx)
     return {"role": role, "route": route, "pool": pool, "model": model or route,
             "context_window": info["context_window"], "capabilities": info["capabilities"],
             "context_options": ctx_options, "context": chosen_ctx,
@@ -345,15 +349,16 @@ def _sanitize_llm_params(data: dict) -> list[str]:
                 clean[key] = val
             else:
                 changed.append(f"params.{role}.{key}")
-        # context size: keep only if it's a real, selectable option for this model AND not just the
-        # default max (no need to persist the default). >1 option means the model is context-selectable.
+        # context size: keep any valid, selectable option for this model (>1 option = context-selectable).
+        # We keep it even when it equals the max — ollama needs the explicit num_ctx to actually use the
+        # full window, and claude's 1M (the top option) must persist to select the [1m] variant.
         ctx_val = slot.get("context")
         ctx_opts = info.get("context_options") or []
         try:
             ctx_int = int(ctx_val) if ctx_val not in (None, "", "default") else 0
         except (TypeError, ValueError):
             ctx_int = 0
-        if ctx_int and len(ctx_opts) > 1 and ctx_int in ctx_opts and ctx_int != ctx_opts[-1]:
+        if ctx_int and len(ctx_opts) > 1 and ctx_int in ctx_opts:
             clean["context"] = ctx_int
         elif ctx_val not in (None, "", "default"):
             changed.append(f"params.{role}.context")
@@ -987,7 +992,8 @@ def _chat_reply(conv):
         # Autocompaction: pull a fuller history and compact it against the model's REAL context
         # window so long conversations don't overflow the model or silently lose old context.
         ctx_msgs = messaging.messages(conv, limit=200)
-        window = (_model_info("orchestrator") or {}).get("context_window") or 0
+        _omi = _model_info("orchestrator") or {}            # use the CHOSEN window (e.g. claude 1M / ollama num_ctx)
+        window = _omi.get("context") or _omi.get("context_window") or 0
         ctx_msgs, _compacted = harness.maybe_compact_history(llm, ctx_msgs, window, status=status_note)
         hctx = harness.build_context(cfg, ctx_msgs, last, env_context=env)
         base = hctx["base"]

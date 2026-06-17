@@ -3,7 +3,7 @@ Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prom
 {prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
 falls through to `fallbacks`. Stdlib only."""
 from __future__ import annotations
-import json, os, shutil, subprocess, tempfile, urllib.request
+import json, os, re, shutil, subprocess, tempfile, urllib.request
 from pathlib import Path
 
 DEFAULT_BACKENDS = {
@@ -71,11 +71,20 @@ def reasoning_caps(kind: str, model_caps=None) -> dict:
     return {"control": None, "options": []}
 
 
-# Context-window selection. An ollama model runs at any num_ctx up to its max (verified: the cloud
-# OpenAI endpoint honors options.num_ctx), so we offer standard sizes up to the model's max and apply
-# the choice. Anthropic Sonnet has a 200K/1M(beta) split, but 1M needs an API key (the CLI refuses
-# --betas), so it's only offered on the anthropic_http backend. Everything else is a single fixed window.
+# Context-window selection. Three ways a model offers more than one window:
+#   - ollama: runs at any num_ctx up to its max (verified: the cloud endpoint honors options.num_ctx).
+#   - claude CLI: sonnet/opus/fable have a 1M variant selected by a "[1m]" model suffix (verified the
+#     CLI accepts e.g. `sonnet[1m]`; using it needs "usage credits" on the account). haiku has none.
+#   - anthropic_http: Sonnet 200K/1M via the API.
+# Everything else is a single fixed window.
 _CTX_STEPS = [16384, 32768, 65536, 131072, 262144, 524288, 1048576]
+_CLAUDE_1M_BASES = ("sonnet", "opus", "fable", "opusplan")   # models with a [1m] variant (NOT haiku)
+_ONE_M = 1000000
+
+
+def _claude_has_1m(model: str) -> bool:
+    m = (model or "").lower()
+    return "haiku" not in m and any(b in m for b in _CLAUDE_1M_BASES)
 
 
 def context_options(kind: str, max_window: int, model: str = "") -> list:
@@ -84,7 +93,9 @@ def context_options(kind: str, max_window: int, model: str = "") -> list:
     if kind in ("ollama_http", "ollama_local") and mw:
         return sorted(set([s for s in _CTX_STEPS if s < mw] + [mw]))
     if kind == "anthropic_http" and "sonnet" in (model or "").lower():
-        return [200000, 1000000]
+        return [200000, _ONE_M]
+    if kind == "claude_cli" and _claude_has_1m(model):
+        return [200000, _ONE_M]                              # 1M = the model[1m] variant (usage credits)
     return [mw] if mw else []
 
 
@@ -96,6 +107,18 @@ def context_num_ctx(kind: str, params: dict) -> int:
         return int((params or {}).get("context") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def claude_model_variant(model: str, params: dict) -> str:
+    """Append the '[1m]' suffix when the 1M context version is selected for a capable claude model, so
+    the CLI uses the 1M-context variant. No-op otherwise (incl. haiku / non-1M sizes)."""
+    try:
+        ctx = int((params or {}).get("context") or 0)
+    except (TypeError, ValueError):
+        ctx = 0
+    if ctx >= _ONE_M and "[1m]" not in (model or "") and _claude_has_1m(model):
+        return f"{model}[1m]"
+    return model
 
 
 def reasoning_value(kind: str, params: dict, model_caps=None) -> str:
@@ -150,8 +173,10 @@ class RoutingLLM:
         workspace = os.environ.get("JARVIS_CODEX_CWD") or os.environ.get("JARVIS_WORKSPACE") or os.getcwd()
         if not Path(workspace).exists():
             workspace = os.getcwd()
-        cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
         kind = backend_kind(backend, spec)
+        if kind == "claude_cli":                                    # 1M context -> the model[1m] variant
+            model = claude_model_variant(model, params)
+        cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
         level = reasoning_value(kind, params)
         if kind == "claude_cli" and level:                          # claude CLI: native --effort flag
             cmd += ["--effort", level]
@@ -301,8 +326,9 @@ class RoutingLLM:
         return args, path
 
     def _stream_claude_cli(self, model, prompt, on_delta, timeout, params, should_cancel=None, images=None,
-                           enable_mcp=False):
+                           enable_mcp=False, _allow_1m_retry=True):
         import subprocess
+        model = claude_model_variant(model, params)          # 1M context -> the model[1m] variant
         cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json",
                "--include-partial-messages", "--verbose"]
         level = reasoning_value("claude_cli", params)        # native --effort (replaces the old keyword hack)
@@ -322,10 +348,14 @@ class RoutingLLM:
         else:
             stdin_data = prompt
         import threading
+        # Capture stderr (not DEVNULL) so we can surface/handle CLI errors like the 1M "usage credits
+        # required" message instead of failing with an opaque "no text".
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, text=True)
+                             stderr=subprocess.PIPE, text=True)
         p.stdin.write(stdin_data); p.stdin.close()
-        full = ""
+        full = ""              # live-streamed text (content_block_delta)
+        pending = ""           # non-streamed final message (assistant/result) — committed only if not an error
+        err_result = ""        # an is_error result event (stream-json puts API errors on stdout, not stderr)
         # HARD wall-clock bound: `for line in p.stdout` blocks with no deadline, so a hung or very-slow
         # CLI (extended thinking that never yields a final block) would freeze the chat thread forever
         # and leave the message stuck streaming=True (the hanging cursor). A watchdog kills the process
@@ -364,17 +394,21 @@ class RoutingLLM:
                         tx = d.get("text") or ""
                         if tx:
                             full += tx; on_delta("text", tx)
-                elif t == "assistant" and not full:              # non-partial fallback
-                    msg = ev.get("message", {})
-                    txt = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
-                    if txt:
-                        full = txt; on_delta("text", txt)
-                elif t == "result" and not full:
-                    r = ev.get("result") or ""
-                    if r:
-                        full = r; on_delta("text", r)
+                elif t == "assistant" and not full:              # non-partial final message: BUFFER, don't
+                    msg = ev.get("message", {})                  # emit yet — an error arrives here too (no
+                    pending = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text") or pending
+                elif t == "result":
+                    if ev.get("is_error"):                        # API error (e.g. 1M needs usage credits)
+                        err_result = ev.get("result") or err_result
+                    elif not full and not pending:
+                        pending = ev.get("result") or pending
         finally:
             killer.cancel()
+            err_txt = ""
+            try:
+                err_txt = (p.stderr.read() or "") if p.stderr else ""
+            except Exception:
+                err_txt = ""
             if p.poll() is None:             # never leave an orphaned/stalled subprocess behind
                 try:
                     p.kill(); p.wait(timeout=5)
@@ -385,10 +419,26 @@ class RoutingLLM:
                     os.unlink(mcp_cleanup)
                 except Exception:
                     pass
-        # A timeout with NO output is a real failure (fail over); a timeout WITH partial text keeps it.
-        if not full and not (should_cancel and should_cancel()):
-            raise RuntimeError("claude stream timed out with no text" if timed_out["v"]
-                               else "claude stream produced no text")
+        if should_cancel and should_cancel():
+            return full
+        err_blob = "\n".join(x for x in (err_result, err_txt) if x)   # stream-json error (stdout) + stderr
+        # Commit the buffered non-streamed message only when the turn did NOT error (an errored turn
+        # carries the error text in that same assistant/result event — we must not show it as the answer).
+        if not full and pending and not err_blob:
+            full = pending; on_delta("text", pending)
+        # 1M selected but the account has no usage credits: don't break the turn — retry once on the
+        # standard 200K context of the SAME model (clear, non-fatal degrade vs. an opaque failure).
+        if (not full and _allow_1m_retry and "[1m]" in model
+                and re.search(r"usage credits|1M context", err_blob, re.I)):
+            std_params = {k: v for k, v in (params or {}).items() if k != "context"}
+            return self._stream_claude_cli(model.replace("[1m]", ""), prompt, on_delta, timeout,
+                                           std_params, should_cancel, images, enable_mcp,
+                                           _allow_1m_retry=False)
+        # A timeout/error with NO output is a real failure (surface a useful message; run() fails over).
+        if not full:
+            detail = err_blob.strip().splitlines()[-1][:160] if err_blob.strip() else ""
+            raise RuntimeError(detail or ("claude stream timed out with no text" if timed_out["v"]
+                                          else "claude stream produced no text"))
         return full
 
     def _stream_http_openai(self, spec, model, prompt, on_delta, timeout, params, should_cancel=None,

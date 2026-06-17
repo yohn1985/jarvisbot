@@ -28,10 +28,13 @@ is set and works. So:
   - There is **no `--think`/`--thinking` flag** in this version.
 - Models: aliases `opus|sonnet|haiku|fable` or full names (`claude-opus-4-8`, `claude-sonnet-4-6`,
   `claude-haiku-4-5`, `claude-fable-5`).
-- Context window: **200K for all models via the CLI.** The 1M Sonnet window needs the beta header
-  `context-1m-2025-08-07`, and `--betas` returns: *"Custom betas are only available for API key
-  users. Ignoring provided betas."* → **1M is unreachable on the subscription CLI.**
-- `--betas <betas...>` exists but is API-key-only.
+- Context window: **200K standard, with a 1M variant** for `sonnet`/`opus`/`fable` (NOT haiku),
+  selected by a **`[1m]` model suffix** (e.g. `claude-sonnet-4-6[1m]`, `sonnet[1m]`). Verified the CLI
+  accepts it; using it needs **usage credits** enabled on the account (`sonnet[1m]` without credits
+  returns *"API Error: Usage credits required for 1M context · turn on usage credits at
+  claude.ai/settings/usage"*). NOTE: the `--betas context-1m-2025-08-07` path is separate and IS
+  API-key-only ("Custom betas are only available for API key users") — that is NOT how the CLI does
+  1M. The model `[1m]` suffix is the correct mechanism.
 
 ### codex (CLI `codex exec`, v0.139.0)
 - Reasoning control = **`model_reasoning_effort`** via `-c model_reasoning_effort=<v>` (already used).
@@ -67,10 +70,11 @@ Files: `jarvis/dashboard/server.py` (`_pool_control_caps`, `_model_controls`, `_
 3. **Effort option sets are not per-pool.** One shared `_CODEX_EFFORT_OPTIONS`
    (`minimal/low/medium/high`) is used everywhere. Claude needs `low/medium/high/xhigh/max`;
    codex needs `minimal/low/medium/high`; ollama needs `low/medium/high`.
-4. **Context windows hardcoded & stale for claude/codex; wrong "1M" assumptions.** `_STATIC_CTX`
-   pins all claude to 200K (correct for CLI) but the UI/user expects a Sonnet 1M option — which is
-   **not reachable on the subscription CLI**. The "two options for Sonnet/Opus" only exist via the
-   API-key (anthropic HTTP) backend, not the `claude` CLI.
+4. **Context windows hardcoded & stale; the 1M variant was missing.** `_STATIC_CTX` pins claude to
+   200K, but sonnet/opus/fable also have a **1M variant via the `[1m]` model suffix** (usage-credit
+   gated) — now offered as a 200K/1M picker that routes to `model[1m]` when 1M is chosen, with a
+   graceful fall back to 200K if credits aren't enabled. (Earlier draft wrongly said 1M needed an API
+   key — that's only the `--betas` path, not the CLI's `[1m]` suffix.)
 5. **The control depends on BACKEND, not just pool/model.** The same Claude model is **effort** via
    the CLI but **thinking (budget_tokens)** via the anthropic HTTP API. `_pool_control_caps` keys off
    pool/format but the CLI-vs-API distinction for claude isn't modeled (CLI is treated as "thinking").
