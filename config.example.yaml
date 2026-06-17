@@ -82,6 +82,14 @@ mcp:
   #   command: npx
   #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/expose"]
   #   enabled: true
+  # Servers that need API keys: reference a secret, never paste it here. ${env:NAME} (or $NAME)
+  # resolves from the environment at spawn time — put the real value in Jarvis's .env / a systemd
+  # EnvironmentFile / an Infisical wrapper, so config.yaml only ever holds the reference.
+  # - name: facebook
+  #   command: npx
+  #   args: ["-y", "<the-facebook-mcp-package>"]
+  #   env: { META_ACCESS_TOKEN: "${env:META_ACCESS_TOKEN}" }
+  #   enabled: true
 
 # Wake triggers
 wake:

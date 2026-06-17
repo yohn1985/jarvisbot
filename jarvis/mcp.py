@@ -34,6 +34,12 @@ _MAX_RESULT = 16000                # cap tool output fed back to the model
 _CLIENTS: dict[str, "MCPClient"] = {}
 _LOCK = threading.RLock()
 
+# Secret references in a server's `env`: ${env:NAME} / ${NAME} / $NAME resolve from the process
+# environment at spawn time, so config.yaml holds only the REFERENCE, never the secret value.
+# Populate the real value via Jarvis's .env, a systemd EnvironmentFile, or an Infisical wrapper —
+# whatever injects it into the environment. Keeps the open-source core generic (no secret in-tree).
+_ENV_REF = re.compile(r"\$\{(?:env:)?([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)")
+
 
 def _san(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", str(name or "")).strip("_")
@@ -73,11 +79,36 @@ class MCPClient:
         self._reader: threading.Thread | None = None
 
     # -- lifecycle ---------------------------------------------------------
+    def _resolve_env(self) -> tuple[dict, list]:
+        """Resolve ${env:NAME}/$NAME references in the server's env from the process environment.
+        Returns (resolved_env, missing_names). Secrets stay out of config.yaml — only refs live there."""
+        try:                                  # best-effort: load Jarvis's .env into os.environ first
+            from jarvis.bootstrap import secrets
+            secrets.load_env()
+        except Exception:
+            pass
+        missing: list[str] = []
+        resolved: dict[str, str] = {}
+        for k, v in (self.env or {}).items():
+            def _sub(m):
+                name = m.group(1) or m.group(2)
+                val = os.environ.get(name)
+                if val is None:
+                    missing.append(name)
+                    return ""
+                return val
+            resolved[str(k)] = _ENV_REF.sub(_sub, str(v))
+        return resolved, missing
+
     def _start(self) -> bool:
         if self.proc and self.proc.poll() is None:
             return True
         env = dict(os.environ)
-        env.update({str(k): str(v) for k, v in self.env.items()})
+        custom, missing = self._resolve_env()
+        if missing:                           # fail closed with a clear signal, not a silent bad-auth
+            self.error = "missing env var(s): " + ", ".join(sorted(set(missing)))
+            return False
+        env.update(custom)
         try:
             self.proc = subprocess.Popen(
                 [self.command, *self.args],
