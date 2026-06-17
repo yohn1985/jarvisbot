@@ -76,6 +76,8 @@
   #chat{ display:flex; flex-direction:column; min-height:0; }
   .newchat{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:10px; letter-spacing:1px; flex-shrink:0; }
   .conv-h{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:8px 8px 4px; flex-shrink:0; }
+  .convsearch{ background:#0c100c; border:1px solid var(--line); color:var(--txt); padding:6px 9px; border-radius:6px; font:inherit; font-size:12px; margin-bottom:6px; flex-shrink:0; outline:none; }
+  .convsearch:focus{ border-color:#2c4a34; }
   .convitem{ padding:8px 10px; border-radius:6px; cursor:pointer; color:var(--dim); display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .convitem:hover{ background:#0f140e; } .convitem.active{ background:#10241a; color:var(--txt); }
   .convitem .t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -234,6 +236,7 @@
     <!-- default view: conversations; a single SETTINGS button pinned at the bottom -->
     <div id="side-convs">
       <button type="button" class="newchat" onclick="newChat()">+ New chat</button>
+      <input id="convsearch" class="convsearch" placeholder="Search conversations…" oninput="onConvSearch(this.value)" autocomplete="off"/>
       <div class="conv-h">CONVERSATIONS</div>
       <div id="convlist"></div>
       <button type="button" class="sidelink side-settings-btn" onclick="openSideSettings('general')">⚙ SETTINGS</button>
@@ -247,6 +250,7 @@
       <button type="button" class="sidelink" id="stab-behavior" onclick="showSet('behavior')">BEHAVIOR</button>
       <button type="button" class="sidelink" id="stab-skills"   onclick="showSet('skills')">SKILLS</button>
       <button type="button" class="sidelink" id="stab-mcp"      onclick="showSet('mcp')">MCP</button>
+      <button type="button" class="sidelink" id="stab-usage"    onclick="showSet('usage')">USAGE</button>
       <button type="button" class="sidelink" id="stab-activity" onclick="showSet('activity')">ACTIVITY</button>
     </div>
   </aside>
@@ -314,6 +318,11 @@
         <div class="setdesc">Model Context Protocol servers (provider-agnostic). Jarvis spawns each one and exposes its tools to whatever brain is selected. Supports local stdio servers and remote HTTP servers with OAuth Connect.</div>
         <div id="set-mcp"></div>
       </div>
+      <div id="setpane-usage" class="setpane" hidden>
+        <h2 class="seth">Usage</h2>
+        <div class="setdesc">Per-model activity from the run log. Subscription CLI backends (claude/codex) have no per-call cost — these are activity figures (calls + duration), not billing.</div>
+        <div id="set-usage"></div>
+      </div>
       <div id="setpane-activity" class="setpane" hidden>
         <h2 class="seth">Recent activity</h2>
         <div class="setdesc">Kernel ticks and spawned workers (the swarm), newest first.</div>
@@ -344,10 +353,11 @@ function show(id){
 // Settings sub-tabs: toggle pane visibility only (never re-render — so it can't wipe typing and
 // stays independent of _cfgSig). All panes remain in the DOM; load() keeps repopulating them.
 function showSet(id){
-  for(const s of ['general','models','behavior','skills','mcp','activity']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
+  for(const s of ['general','models','behavior','skills','mcp','usage','activity']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
   for(const b of document.querySelectorAll('#side-settings .sidelink:not(.side-back)')) b.classList.remove('active');
   const t=document.getElementById('stab-'+id); if(t) t.classList.add('active');
   if(id==='mcp') loadMcp();   // probe servers lazily (spawns them) only when the tab is opened
+  if(id==='usage') loadUsage();
 }
 function openSideSettings(id){
   const sc=document.getElementById('side-convs'); if(sc) sc.hidden=true;
@@ -562,8 +572,21 @@ function mcpRowHTML(s){
     '<textarea class="mcp-env" rows="2" placeholder="env — one KEY=VALUE per line. For secrets use a reference, NEVER the value:  HIGGSFIELD_API_KEY=${env:HIGGSFIELD_API_KEY}" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace">'+esc(Object.entries(s.env||{}).map(function(e){return e[0]+'='+e[1];}).join('\n'))+'</textarea>'+
     '<label style="display:inline-block;margin-right:12px"><input type="checkbox" class="mcp-enabled" '+(s.enabled===false?'':'checked')+'/> enabled</label>'+
     connectBtn+' '+
+    (s.name?'<button type="button" class="bigbtn" onclick="mcpTest(\''+esc(s.name)+'\',this)">Test</button> ':'')+
     '<button type="button" class="bigbtn" onclick="this.closest(\'.mcp-row\').remove()">Remove</button>'+
-    (status?'<div style="margin-top:6px">'+status+'</div>':'')+'</div>';
+    (status?'<div style="margin-top:6px">'+status+'</div>':'')+
+    '<div class="mcp-testres" style="margin-top:6px"></div></div>';
+}
+async function mcpTest(name,btn){
+  const res=btn&&btn.closest('.mcp-row')?btn.closest('.mcp-row').querySelector('.mcp-testres'):null;
+  if(res){ res.innerHTML='<span class="muted">testing '+esc(name)+'…</span>'; }
+  try{
+    const j=await fetch('/api/mcp/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(r=>r.json());
+    if(!res) return;
+    if(j.connected) res.innerHTML='<span class="skok">✓ '+esc(j.transport||'')+' connected — '+(j.tools||[]).length+' tool(s): '+esc((j.tools||[]).join(', '))+'</span>';
+    else if(j.needs_auth) res.innerHTML='<span class="skerr">needs authorization — click Connect</span>';
+    else res.innerHTML='<span class="skerr">✕ '+esc(j.error||'not connected')+'</span>';
+  }catch(e){ if(res) res.innerHTML='<span class="skerr">✕ '+esc(String(e))+'</span>'; }
 }
 async function mcpConnect(name){
   // Open the tab SYNCHRONOUSLY (inside the click) so the browser doesn't block it as a non-gesture
@@ -1001,22 +1024,26 @@ async function load(){
   if(!activeConv && convs.length) activeConv = convs[0].id;
   const msgs = activeConv ? await fetch('/api/messages?conv='+encodeURIComponent(activeConv)).then(r=>r.json()) : [];
   if((msgs||[]).some(m=>m.streaming)) _fastUntil=Date.now()+12000;   // keep polling fast while a reply streams
-  // conversations sidebar
+  // conversations sidebar (apply the search filter, if active)
   const clist=document.getElementById('convlist'); clist.innerHTML='';
-  const active=convs.filter(c=>!c.archived), archived=convs.filter(c=>c.archived);
+  let shown=convs;
+  if(_convQuery){ const m=_convMatch||new Set(); shown=convs.filter(c=>m.has(c.id)); }
+  const active=shown.filter(c=>!c.archived), archived=shown.filter(c=>c.archived);
   const item=(c,isArch)=>{
     const act=c.id===activeConv?' active':'';
     const badge=c.open_q?`<span class="badge">${c.open_q}</span>`:'';
+    const ren=`<button type="button" class="ar" title="rename" onclick="event.stopPropagation();renameConv('${c.id}')">✎</button>`;
     const btn=isArch
-      ?`<button type="button" class="ar" title="unarchive" onclick="event.stopPropagation();archiveConv('${c.id}',false)">⤴</button>`+
+      ?ren+`<button type="button" class="ar" title="unarchive" onclick="event.stopPropagation();archiveConv('${c.id}',false)">⤴</button>`+
        `<button type="button" class="ar" title="delete permanently" onclick="event.stopPropagation();deleteConv('${c.id}')">🗑</button>`
-      :`<button type="button" class="ar" title="archive" onclick="event.stopPropagation();archiveConv('${c.id}',true)">×</button>`;
+      :ren+`<button type="button" class="ar" title="archive" onclick="event.stopPropagation();archiveConv('${c.id}',true)">×</button>`;
     return `<div class="convitem${act}" onclick="selectConv('${c.id}')"><span class="t">${esc(c.title)}</span><span>${badge}${btn}</span></div>`;
   };
+  if(_convQuery && !shown.length){ clist.insertAdjacentHTML('beforeend', `<div class="empty" style="padding:12px 10px">No matches for "${esc(_convQuery)}"</div>`); }
   for(const c of active) clist.insertAdjacentHTML('beforeend', item(c,false));
   if(archived.length){
     clist.insertAdjacentHTML('beforeend', `<button type="button" class="archtoggle" onclick="toggleArch()">${showArch?'▾':'▸'} ARCHIVED (${archived.length})</button>`);
-    if(showArch) for(const c of archived) clist.insertAdjacentHTML('beforeend', item(c,true));
+    if(showArch||_convQuery) for(const c of archived) clist.insertAdjacentHTML('beforeend', item(c,true));
   }
   document.getElementById('convtitle').textContent = activeConv ? (convs.find(c=>c.id===activeConv)?.title||activeConv) : 'New conversation';
   // runs
@@ -1211,6 +1238,44 @@ async function deleteConv(id){
   await fetch('/api/delete_conv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:id})});
   if(activeConv===id) activeConv=null;
   load();
+}
+async function renameConv(id){
+  const cur=(document.querySelector(`.convitem`)&&'')||''; const title=prompt('Rename conversation (blank = reset to auto title):');
+  if(title===null) return;
+  await fetch('/api/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:id,title})});
+  _chatSig=''; load();
+}
+// conversation search: server matches title + message content; we filter the sidebar to the hits.
+let _convQuery='', _convMatch=null, _convSearchT=null;
+function onConvSearch(q){
+  _convQuery=(q||'').trim();
+  clearTimeout(_convSearchT);
+  if(!_convQuery){ _convMatch=null; load(); return; }
+  _convSearchT=setTimeout(async()=>{
+    try{ const r=await fetch('/api/search?q='+encodeURIComponent(_convQuery)); const j=await r.json(); _convMatch=new Set(j.ids||[]); }
+    catch(e){ _convMatch=new Set(); }
+    load();
+  },200);
+}
+async function loadUsage(){
+  const el=document.getElementById('set-usage'); if(!el) return;
+  el.innerHTML='<div class="empty">Loading usage…</div>';
+  let u; try{ u=await fetch('/api/usage').then(r=>r.json()); }catch(e){ el.innerHTML='<div class="skerr">✕ '+e+'</div>'; return; }
+  const fmtDur=s=>s==null?'—':(s>=60?(s/60).toFixed(1)+'m':s+'s');
+  let h='';
+  for(const w of (u.windows||[])){
+    h+=`<h2 class="seth">Last ${esc(w.label)} <span class="muted">· ${w.total} call(s)</span></h2>`;
+    if(!(w.models||[]).length){ h+='<div class="empty" style="padding:8px 0">No activity in this window.</div>'; continue; }
+    h+='<table><thead><tr><th>MODEL</th><th>CALLS</th><th>OK</th><th>FAILED</th><th>AVG</th><th>TOTAL</th><th>LAST</th></tr></thead><tbody>';
+    for(const m of w.models){
+      h+=`<tr><td>${esc(m.model)}</td><td>${m.calls}</td><td>${m.ok}</td>`+
+         `<td>${m.failed?('<span class="skerr">'+m.failed+'</span>'):'0'}</td>`+
+         `<td>${fmtDur(m.avg_s)}</td><td>${fmtDur(m.total_s)}</td><td class="muted">${esc((m.last_ts||'').replace('T',' '))}</td></tr>`;
+    }
+    h+='</tbody></table>';
+  }
+  for(const n of (u.notes||[])) h+=`<div class="setdesc" style="margin-top:10px">ℹ ${esc(n)}</div>`;
+  el.innerHTML=h;
 }
 function selectConv(id){ activeConv=id; _focusLatestTurn=true; _chatSig=''; _chatIds=''; load(); }
 function newChat(){ activeConv='chat-'+Date.now().toString(36); document.getElementById('chatlog').innerHTML=''; document.getElementById('convtitle').textContent='New conversation'; show('chat'); }

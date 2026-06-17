@@ -64,6 +64,58 @@ def _runs():
         return []
 
 
+def _usage():
+    """Per-model activity aggregated from runs.jsonl over 24h / 7d / all. Honest: subscription CLI
+    backends have no per-call $, so we report calls/duration (activity), not invented cost."""
+    import time as _t
+    try:
+        from jarvis.runtime import recent
+        rows = recent(5000)
+    except Exception:
+        rows = []
+
+    def _ts(r):
+        try:
+            return _t.mktime(_t.strptime(r.get("ts", ""), "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return 0.0
+
+    now = _t.time()
+    out = {"windows": [], "notes": []}
+    for label, span in (("24h", 86400), ("7d", 7 * 86400), ("all", None)):
+        cutoff = (now - span) if span else 0
+        agg = {}
+        for r in rows:
+            if _ts(r) < cutoff:
+                continue
+            model = r.get("model") or "-"
+            a = agg.setdefault(model, {"model": model, "calls": 0, "ok": 0, "failed": 0,
+                                       "_dsum": 0.0, "_dn": 0, "last_ts": ""})
+            a["calls"] += 1
+            a["failed" if r.get("status") == "failed" else "ok"] += 1
+            d = r.get("duration")
+            if isinstance(d, (int, float)):
+                a["_dsum"] += d; a["_dn"] += 1
+            if r.get("ts", "") > a["last_ts"]:
+                a["last_ts"] = r.get("ts", "")
+        models = []
+        for a in agg.values():
+            a["avg_s"] = round(a["_dsum"] / a["_dn"], 1) if a["_dn"] else None
+            a["total_s"] = round(a["_dsum"], 1) if a["_dn"] else None
+            a.pop("_dsum", None); a.pop("_dn", None)
+            models.append(a)
+        models.sort(key=lambda x: x["calls"], reverse=True)
+        out["windows"].append({"label": label, "total": sum(m["calls"] for m in models), "models": models})
+    try:
+        from jarvis.adapters import llm as _llm
+        if _llm.one_m_unavailable():
+            out["notes"].append("Claude 1M is currently falling back to 200K — usage credits not enabled.")
+    except Exception:
+        pass
+    out["notes"].append("Subscription CLI backends (claude/codex) have no per-call cost; figures are activity, not $.")
+    return out
+
+
 def _config():
     for name in ("config.yaml", "config.example.yaml"):
         p = ROOT / name
@@ -1539,6 +1591,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_models()))
         if u.path == "/api/conversations":
             return self._send(200, json.dumps(_conversations()))
+        if u.path == "/api/search":
+            from jarvis import messaging
+            q = (parse_qs(u.query).get("q") or [""])[0]
+            return self._send(200, json.dumps({"ids": messaging.search(q)}))
+        if u.path == "/api/usage":
+            return self._send(200, json.dumps(_usage()))
         if u.path == "/api/messages":
             conv = (parse_qs(u.query).get("conv") or [None])[0]
             return self._send(200, json.dumps(_messages(conv)))
@@ -1733,6 +1791,16 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/delete_conv":
                 n = messaging.delete_conv(body.get("conv", ""))
                 return self._send(200, json.dumps({"ok": True, "deleted": n}))
+            if u.path == "/api/rename":
+                messaging.set_title(body.get("conv", ""), body.get("title", ""))
+                return self._send(200, json.dumps({"ok": True}))
+            if u.path == "/api/mcp/test":
+                try:
+                    from jarvis.config import load
+                    from jarvis import mcp
+                    return self._send(200, json.dumps(mcp.test(load(), (body.get("name") or "").strip())))
+                except Exception as e:
+                    return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
             if u.path == "/api/config-save":
                 try:
                     detail = _save_config(body or {})

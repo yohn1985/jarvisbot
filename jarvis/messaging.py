@@ -128,7 +128,40 @@ def conversations() -> list[dict]:
             e["title"] = m["conv_title"]
         if m.get("kind") == "question" and not m.get("answered"):
             e["open_q"] += 1
+    for e in convs.values():                              # a custom (owner-set) title wins over the auto one
+        ct = (meta.get(e["id"], {}) or {}).get("title")
+        if ct:
+            e["title"] = ct
     return sorted(convs.values(), key=lambda c: c["last_ts"], reverse=True)
+
+
+def set_title(conv: str, title: str) -> None:
+    """Owner-set conversation title (overrides the auto title); stored in meta, messages untouched."""
+    m = _meta()
+    title = (title or "").strip()[:120]
+    if title:
+        m.setdefault(conv, {})["title"] = title
+    else:
+        m.get(conv, {}).pop("title", None)               # blank clears it -> back to the auto title
+    _save_meta(m)
+
+
+def search(query: str, limit: int = 50) -> list[str]:
+    """Conversation ids whose custom/auto title OR any message text matches `query` (case-insensitive),
+    most-recent first."""
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    titles = {c["id"]: (c["title"] or "") for c in conversations()}
+    order = [c["id"] for c in conversations()]            # already most-recent-first
+    hit = set()
+    for cid, title in titles.items():
+        if q in title.lower():
+            hit.add(cid)
+    for m in _all():
+        if q in str(m.get("text") or "").lower():
+            hit.add(_conv_of(m))
+    return [cid for cid in order if cid in hit][:limit]
 
 
 def messages(conv: str | None = None, limit: int = 200) -> list[dict]:

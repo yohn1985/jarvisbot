@@ -721,6 +721,28 @@ def claude_cli_config(cfg: dict) -> tuple[dict, list[str]]:
     return {"mcpServers": servers}, allowed
 
 
+def test(cfg: dict, name: str) -> dict:
+    """Force a FRESH connect+probe of one server (drop the cached client first) and report health —
+    a manual check from the UI without a chat turn (after enabling credits, rotating a token, etc.)."""
+    name = _san(name)
+    with _LOCK:
+        c = _CLIENTS.pop(name, None)
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+    spec = next((s for s in servers_from_cfg(cfg) if _san(s.get("name")) == name), None)
+    if not spec:
+        return {"ok": False, "name": name, "error": "unknown or disabled server"}
+    c = _client(spec)
+    ok = c.connect()
+    return {"ok": ok, "name": name, "connected": ok, "transport": "http" if spec.get("url") else "stdio",
+            "needs_auth": getattr(c, "needs_auth", False),
+            "tools": [t.get("name") for t in c.tools] if ok else [],
+            "error": c.error}
+
+
 def shutdown() -> None:
     with _LOCK:
         for c in _CLIENTS.values():
