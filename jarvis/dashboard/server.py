@@ -561,6 +561,10 @@ def _save_mcp(servers):
             entry["url"] = str(s["url"]).strip()
             if str(s.get("scope") or "").strip():
                 entry["scope"] = str(s["scope"]).strip()
+            if str(s.get("client_id") or "").strip():   # for servers w/o dynamic registration (e.g. Meta App ID)
+                entry["client_id"] = str(s["client_id"]).strip()
+            if str(s.get("client_secret") or "").strip():   # a ${env:NAME} reference, not the secret value
+                entry["client_secret"] = str(s["client_secret"]).strip()
         else:                                          # stdio MCP server (command + args)
             entry["command"] = str(s["command"]).strip()
             entry["args"] = [str(a) for a in (args or [])]

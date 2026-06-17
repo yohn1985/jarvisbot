@@ -82,11 +82,26 @@ def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
+def _resolve_secret(value: str) -> str:
+    """Resolve ${env:NAME}/$NAME refs from the environment, so a client_secret can be a reference
+    (kept in .env) instead of sitting in config.yaml. Loads Jarvis's .env best-effort first."""
+    s = str(value or "")
+    if "$" not in s:
+        return s
+    try:
+        from jarvis.bootstrap import secrets
+        secrets.load_env()
+    except Exception:
+        pass
+    return _ENV_REF.sub(lambda m: os.environ.get(m.group(1) or m.group(2), ""), s)
+
+
 def _http(url: str, *, method: str = "GET", data=None, headers=None, timeout: int = 20):
     """Minimal stdlib HTTP returning (status, headers_dict, parsed_json_or_text). Never raises on
     HTTP error status — returns it so callers can branch (e.g. 401 -> needs auth)."""
     body = None
     hdrs = dict(headers or {})
+    hdrs.setdefault("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
     if data is not None:
         if isinstance(data, (dict, list)):
             body = json.dumps(data).encode(); hdrs.setdefault("Content-Type", "application/json")
@@ -332,8 +347,15 @@ def _discover_oauth(mcp_url: str, www_authenticate: str = "") -> dict:
         if isinstance(j, dict) and j.get("authorization_servers"):
             auth_servers = j["authorization_servers"]; break
     auth_base = (auth_servers[0] if auth_servers else origin).rstrip("/")
-    for wk in ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"):
-        st, _h, j = _http(auth_base + wk, timeout=15)
+    ap = urllib.parse.urlparse(auth_base)
+    a_origin = f"{ap.scheme}://{ap.netloc}"
+    a_path = ap.path.rstrip("/")                  # e.g. "/ads" (Meta) or "" (Higgsfield)
+    cands = []
+    for wk in ("oauth-authorization-server", "openid-configuration"):
+        cands.append(f"{a_origin}/.well-known/{wk}{a_path}")   # RFC 8414: well-known at root + path
+        cands.append(f"{auth_base}/.well-known/{wk}")          # path-then-well-known variant
+    for c in dict.fromkeys(cands):                # dedupe (collapse when a_path == "")
+        st, _h, j = _http(c, timeout=15)
         if isinstance(j, dict) and j.get("authorization_endpoint") and j.get("token_endpoint"):
             return j
     return {}
@@ -371,11 +393,14 @@ def begin_auth(cfg: dict, name: str) -> dict:
     if not meta.get("authorization_endpoint") or not meta.get("token_endpoint"):
         return {"ok": False, "error": "could not discover the server's OAuth endpoints"}
     saved = _load_tokens(name)
-    client = {"client_id": saved.get("client_id"), "client_secret": saved.get("client_secret", "")}
-    if not client["client_id"]:
-        client = _register_client(meta, redirect)
+    # Prefer an explicitly configured client (e.g. a Meta App ID — Meta doesn't allow dynamic
+    # registration); else a previously registered one; else try dynamic client registration.
+    cid = spec.get("client_id") or saved.get("client_id")
+    secret = _resolve_secret(spec.get("client_secret") or saved.get("client_secret", ""))
+    client = {"client_id": cid, "client_secret": secret} if cid else _register_client(meta, redirect)
     if not client.get("client_id"):
-        return {"ok": False, "error": "this server requires manual app registration (no dynamic registration)"}
+        return {"ok": False, "error": "this server requires a registered app — set a client_id on the "
+                "server (e.g. your Meta App ID) and add the redirect URI to that app: " + redirect}
     verifier = _b64url(_secrets.token_bytes(48))
     challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
     state = _b64url(_secrets.token_bytes(24))
