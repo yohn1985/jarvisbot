@@ -1,0 +1,19 @@
+# Run the test suite on every push / PR. Stdlib-only — no dependencies to install.
+# GitHub Actions runs this on the public mirror; Gitea Actions runs the same file (it falls back to
+# .github/workflows) once an act_runner is registered on the instance.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run unittest suite
+        run: python -m unittest discover -s tests -q

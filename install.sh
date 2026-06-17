@@ -503,6 +503,16 @@ down(){ command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2
 pybin(){ [ -x "$ROOT/.venv/bin/python" ] && echo "$ROOT/.venv/bin/python" || echo python3; }
 breathe(){ log "one tick:"; "$(pybin)" "$ROOT/jarvis/kernel.py"; }
 
+install_hooks(){
+  # Client-side gate: block `git push` if the suite is red. Git hooks aren't shared via the repo,
+  # so each clone runs this once. Server-side CI (.github/workflows/test.yml) gates pushed refs too.
+  local d="$ROOT/.git/hooks"
+  [ -d "$d" ] || die "no $d — run this from a git work tree"
+  printf '#!/usr/bin/env bash\n# Jarvis: never push red — runs the test suite (installed by ./install.sh hooks).\nexec "%s/install.sh" test\n' "$ROOT" > "$d/pre-push"
+  chmod +x "$d/pre-push"
+  log "installed pre-push test gate -> .git/hooks/pre-push"
+}
+
 venv(){ [ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv" >/dev/null 2>&1; echo "$ROOT/.venv"; }
 skill_cmd(){
   local cmd="${1:-list}"; shift 2>/dev/null || true
@@ -696,6 +706,7 @@ case "${1:-up}" in
   wake)     mkdir -p "$ROOT/state"; touch "$ROOT/state/wake"; log "wake marker set";;
   selfcheck) "$(pybin)" "$ROOT/jarvis/safety/fitness.py";;     # tamper-proof fitness score
   test)     ( cd "$ROOT" && "$(pybin)" -m unittest discover -s tests -q );;   # run the suite (exit!=0 on failure)
+  hooks)    install_hooks;;                                    # install a pre-push test gate in this clone
   archive)  "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import snapshot,list_archive;print('snapshot:',snapshot('manual'));print('archive:',list_archive()[:5])";;
   rollback) "$(pybin)" -c "import sys;sys.path.insert(0,'$ROOT');from jarvis.safety.seatbelt import rollback;print('rolled back' if rollback('${2:-}') else 'failed')";;
   skill)    shift; skill_cmd "$@";;
@@ -703,5 +714,5 @@ case "${1:-up}" in
   url|login) login_banner "$(dash_url)" "$ROOT";;   # re-print the login link any time
   token)    cat "$ROOT/state/dashboard_token" 2>/dev/null || die "no token yet — run ./install.sh up";;
   doctor)   doctor;;
-  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|test|selfcheck|dashboard|doctor|install-service|uninstall [--purge])";;
+  *) die "unknown subcommand '$1' (up|down|breathe|run|url|token|skill|test|hooks|selfcheck|dashboard|doctor|install-service|uninstall [--purge])";;
 esac
