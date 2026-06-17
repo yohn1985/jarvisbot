@@ -77,9 +77,25 @@ def c_working_mem():
     return ("working_mem", "WM=" in r.stdout and ":1" in r.stdout, (r.stderr or "").strip()[-160:])
 
 
+def c_unit_tests():
+    """Run the stdlib unittest suite. This is the regression gate: a self-edit (or any change) that
+    breaks observable behavior fails here, so the seatbelt won't adopt it. Degrades gracefully — a
+    missing suite isn't penalized, but a genuine failure (or a hang) counts as not-ok."""
+    tests_dir = ROOT / "tests"
+    if not tests_dir.exists():
+        return ("unit_tests", True, "no tests dir")
+    try:
+        r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+                           capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    except Exception as e:
+        return ("unit_tests", False, str(e)[:160])
+    tail = (r.stderr or r.stdout).strip().splitlines()
+    return ("unit_tests", r.returncode == 0, (tail[-1] if tail else "")[:160])
+
+
 def main():
     checks = [c_syntax(), c_kernel_ticks(), c_verify_failclosed(), c_router_builds(),
-              c_memory_reads(), c_working_mem()]
+              c_memory_reads(), c_working_mem(), c_unit_tests()]
     score = sum(1 for _, ok, _ in checks if ok)
     print(json.dumps({"score": score, "max": len(checks),
                       "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]}))

@@ -18,7 +18,8 @@ class ModelControlTests(unittest.TestCase):
         effective, unsupported = server._effective_reasoning_params({"thinking": "medium"}, controls)
 
         self.assertTrue(controls["effort"]["supported"])
-        self.assertIn("none", controls["effort"]["options"])
+        self.assertEqual(controls["effort"]["options"], ["default", "low", "medium", "high"])
+        self.assertNotIn("none", controls["effort"]["options"])  # 'none' is not a real reasoning_effort
         self.assertEqual(controls["effort"]["value"], "default")
         self.assertFalse(controls["thinking"]["supported"])
         self.assertEqual(effective, {})
@@ -33,13 +34,14 @@ class ModelControlTests(unittest.TestCase):
         self.assertFalse(controls["effort"]["supported"])
         self.assertFalse(controls["thinking"]["supported"])
 
-    def test_claude_exposes_thinking_max(self):
-        controls = server._model_controls("claude", ["claude", "-p"], "claude-opus-4-8", {}, {"thinking": "max"})
+    def test_claude_cli_exposes_effort_not_thinking(self):
+        # The Claude CLI controls reasoning via the native --effort flag (low..max), NOT a thinking budget.
+        controls = server._model_controls("claude", ["claude", "-p"], "claude-opus-4-8", {}, {"effort": "max"})
 
-        self.assertFalse(controls["effort"]["supported"])
-        self.assertTrue(controls["thinking"]["supported"])
-        self.assertIn("max", controls["thinking"]["options"])
-        self.assertEqual(controls["thinking"]["value"], "max")
+        self.assertTrue(controls["effort"]["supported"])
+        self.assertEqual(controls["effort"]["options"], ["default", "low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(controls["effort"]["value"], "max")
+        self.assertFalse(controls["thinking"]["supported"])
 
     def test_sanitize_removes_stale_thinking_for_ollama_cloud(self):
         old_context_window = server._context_window
