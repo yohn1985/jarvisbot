@@ -158,25 +158,16 @@ def _pools(refresh=False):
     return data
 
 
-_THINKING_OPTIONS = ["default", "low", "medium", "high", "max"]
-_CODEX_EFFORT_OPTIONS = ["default", "minimal", "low", "medium", "high"]
-_OLLAMA_EFFORT_OPTIONS = ["default", "none", "low", "medium", "high"]
-
-
 def _pool_control_caps(pool_name: str, spec) -> dict:
-    """Coarse backend controls. Model-specific controls are in _model_controls()."""
-    if pool_name in ("claude", "anthropic") or (isinstance(spec, dict) and spec.get("format") == "anthropic"):
-        return {"effort": False, "thinking": True}
-    if pool_name in ("codex", "openai"):
-        return {"effort": True, "thinking": False}
-    if pool_name == "ollama_cloud" or (
-        isinstance(spec, dict) and spec.get("http") and "ollama" in (spec.get("http") or "").lower()
-    ):
-        # Ollama Cloud needs model metadata too: only thinking-capable models accept effort control.
-        return {"effort": True, "thinking": False}
-    if isinstance(spec, dict) and spec.get("http"):
-        return {"effort": True, "thinking": False}
-    return {"effort": False, "thinking": False}
+    """Coarse pool-level hint for the routing picker: does this backend expose effort and/or thinking?
+    The authoritative, model-aware answer is in _model_controls() via the shared resolver in
+    adapters.llm (reasoning_caps). This is just enough to badge a pool before a model is chosen."""
+    from jarvis.adapters import llm as _llm
+    kind = _llm.backend_kind(pool_name, spec)
+    # For ollama, effort depends on per-model caps; advertise it at the pool level (model gate applies later).
+    caps = _llm.reasoning_caps(kind, model_caps=["thinking"] if kind in ("ollama_http", "ollama_local") else None)
+    ctrl = caps.get("control")
+    return {"effort": ctrl == "effort", "thinking": ctrl == "thinking"}
 
 
 # Context-window detection. Ollama exposes it via POST /api/show (model_info "*.context_length");
@@ -237,43 +228,25 @@ def _split_route(route: str) -> tuple[str, str]:
 
 
 def _model_controls(pool_name: str, spec, model: str, detected: dict, params: dict) -> dict:
-    caps = detected.get("capabilities") or []
-    base = _pool_control_caps(pool_name, spec)
+    """Authoritative per-(backend,model) reasoning control for the dashboard chip. Single source of
+    truth = adapters.llm.reasoning_caps(backend_kind, model_caps): it returns the ONE control the
+    backend actually honors (effort OR thinking) and the CORRECT option set for that backend. Ollama
+    gates effort on the model's live /api/show caps (effort only when 'thinking' is present)."""
+    from jarvis.adapters import llm as _llm
+    kind = _llm.backend_kind(pool_name, spec)
+    caps = _llm.reasoning_caps(kind, model_caps=detected.get("capabilities") or [])
     controls = {
         "effort": {"supported": False, "options": ["default"], "value": "default"},
         "thinking": {"supported": False, "options": ["default"], "value": "default"},
     }
-    if base.get("thinking"):
-        value = str(params.get("thinking") or "default")
-        controls["thinking"] = {
+    ctrl = caps.get("control")
+    if ctrl in ("effort", "thinking"):
+        options = ["default"] + list(caps.get("options") or [])
+        value = str((params or {}).get(ctrl) or "default")
+        controls[ctrl] = {
             "supported": True,
-            "options": _THINKING_OPTIONS,
-            "value": value if value in _THINKING_OPTIONS else "default",
-        }
-    if pool_name == "codex":
-        value = str(params.get("effort") or "default")
-        controls["effort"] = {
-            "supported": True,
-            "options": _CODEX_EFFORT_OPTIONS,
-            "value": value if value in _CODEX_EFFORT_OPTIONS else "default",
-        }
-    elif pool_name == "ollama_cloud" or (
-        isinstance(spec, dict) and spec.get("http") and "ollama" in (spec.get("http") or "").lower()
-    ):
-        # Ollama's OpenAI-compatible endpoint supports reasoning_effort only for thinking models.
-        if "thinking" in caps:
-            value = str(params.get("effort") or "default")
-            controls["effort"] = {
-                "supported": True,
-                "options": _OLLAMA_EFFORT_OPTIONS,
-                "value": value if value in _OLLAMA_EFFORT_OPTIONS else "default",
-            }
-    elif base.get("effort"):
-        value = str(params.get("effort") or "default")
-        controls["effort"] = {
-            "supported": True,
-            "options": _CODEX_EFFORT_OPTIONS,
-            "value": value if value in _CODEX_EFFORT_OPTIONS else "default",
+            "options": options,
+            "value": value if value in options else "default",
         }
     return controls
 
@@ -408,7 +381,10 @@ def _save_config(patch):
             if not isinstance(rparams, dict):
                 continue
             slot = pr.setdefault(role, {})
-            for k, allowed in (("effort", {"none", "minimal", "low", "medium", "high"}),
+            # Coarse gate = union of every backend's valid values; the exact per-(backend,model) set is
+            # enforced by _sanitize_llm_params() on save via the shared resolver. Keep these in sync with
+            # adapters.llm option sets (claude adds xhigh/max; codex/openai add minimal; no 'none').
+            for k, allowed in (("effort", {"minimal", "low", "medium", "high", "xhigh", "max"}),
                                ("thinking", {"low", "medium", "high", "max"})):
                 v = rparams.get(k)
                 if v in (None, "", "default"):
@@ -1427,6 +1403,11 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b)))
+        # The dashboard HTML is served inline (markup + CSS + JS in one doc) and changes on every
+        # deploy. Tell the browser never to reuse a cached copy, so a UI fix always shows up without
+        # the user having to hard-refresh (a stale inline CSS once hid the chat composer off-screen).
+        if ctype == "text/html":
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         self.end_headers()
@@ -1443,7 +1424,9 @@ class H(BaseHTTPRequestHandler):
                     "<p style='color:#6f7e6b'>You can close this tab and return to Jarvis.</p></body></html>")
         err = (q.get("error") or [""])[0]
         if err:
-            return self._send(200, _page("#d85a5a", "Authorization was declined: " + _h(err)), "text/html")
+            desc = (q.get("error_description") or [""])[0]
+            return self._send(200, _page("#d85a5a", "Authorization was declined: " + _h(err) +
+                                         (("<br><span style='font-size:13px'>" + _h(desc) + "</span>") if desc else "")), "text/html")
         try:
             from jarvis import mcp
             res = mcp.complete_auth((q.get("state") or [""])[0], (q.get("code") or [""])[0])
@@ -1558,7 +1541,13 @@ class H(BaseHTTPRequestHandler):
             try:
                 from jarvis.config import load
                 from jarvis import mcp
-                return self._send(200, json.dumps(mcp.begin_auth(load(), (body.get("name") or "").strip())))
+                name = (body.get("name") or "").strip()
+                # Send the OAuth provider back to the SAME origin the browser is using (LAN IP/host),
+                # not loopback — otherwise the callback hits 127.0.0.1 on the user's machine (refused).
+                host = self.headers.get("Host") or "127.0.0.1:8787"
+                proto = self.headers.get("X-Forwarded-Proto", "http")
+                base_redirect = f"{proto}://{host}/api/mcp/oauth/callback"
+                return self._send(200, json.dumps(mcp.begin_auth(load(), name, base_redirect)))
             except Exception as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:200]}))
         if u.path == "/api/mcp/disconnect":
@@ -1697,6 +1686,9 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/archive":
                 messaging.archive(body.get("conv", ""), bool(body.get("archived", True)))
                 return self._send(200, json.dumps({"ok": True}))
+            if u.path == "/api/delete_conv":
+                n = messaging.delete_conv(body.get("conv", ""))
+                return self._send(200, json.dumps({"ok": True, "deleted": n}))
             if u.path == "/api/config-save":
                 try:
                     detail = _save_config(body or {})

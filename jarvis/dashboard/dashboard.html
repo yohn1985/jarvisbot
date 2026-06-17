@@ -12,6 +12,7 @@
   *{ scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
   *::-webkit-scrollbar{ width:8px; height:8px; } *::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
   *::-webkit-scrollbar-track{ background:transparent; } *::-webkit-scrollbar-corner{ background:transparent; }
+  html,body{ height:100%; overflow:hidden; }   /* outer page never scrolls — overflow lives in inner panes (chat log, etc) */
   body{ margin:0; background:var(--bg); color:var(--txt); font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
   header{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); }
   header .title{ letter-spacing:2px; color:var(--grntxt); font-weight:600; }
@@ -47,36 +48,45 @@
   .badge{ background:var(--red); color:#fff; border-radius:9px; padding:0 6px; font-size:10px; margin-left:4px; }
   [hidden]{ display:none !important; }
   main{ height:calc(100vh - 96px); padding:0; }
-  #knowledge{ height:100%; overflow-y:auto; }
-  /* Settings is now a sidebar (left rail, same width as chat/knowledge) + a scrolling body. */
-  #settings{ display:flex; flex-direction:row; height:100%; }
-  .setside{ width:var(--side); min-width:var(--side); border-right:1px solid var(--line); overflow-y:auto; padding:12px 10px; display:flex; flex-direction:column; gap:2px; }
-  .setside button{ text-align:left; background:none; border:none; color:var(--dim); padding:9px 12px; cursor:pointer; letter-spacing:1px; border-left:2px solid transparent; border-radius:6px; font:inherit; }
-  .setside button:hover{ background:#0f140e; }
-  .setside button.active{ color:var(--grntxt); border-left-color:var(--grn); background:#10241a; }
-  .setbody{ flex:1; overflow-y:auto; min-width:0; }
+  #knowledge{ flex:1; min-height:0; overflow-y:auto; }
+  /* Persistent global sidebar: visible in chat + settings, hidden in knowledge (which has its own) */
+  main{ display:flex; flex-direction:row; }
+  #sidebar{ width:var(--side); min-width:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; flex-shrink:0; overflow:hidden; }
+  #side-convs{ display:flex; flex-direction:column; flex:1; min-height:0; padding:12px 10px; gap:2px; }
+  #side-settings{ display:flex; flex-direction:column; flex:1; min-height:0; padding:12px 10px; gap:2px; }
+  #convlist{ flex:1; overflow-y:auto; min-height:0; }
+  .sidelink{ text-align:left; background:none; border:none; color:var(--dim); padding:8px 10px; cursor:pointer; letter-spacing:1px; border-radius:6px; font:inherit; width:100%; }
+  .sidelink:hover{ background:#0f140e; color:var(--txt); }
+  .sidelink.active{ color:var(--grntxt); background:#10241a; }
+  .side-back{ color:var(--grntxt); font-size:12px; border:1px solid var(--line); margin-bottom:6px; }
+  .side-settings-btn{ margin-top:auto; padding:12px 10px 10px; border-top:1px solid var(--line); border-radius:0; flex-shrink:0; letter-spacing:1px; position:sticky; bottom:0; background:var(--bg); }
+  /* #sections is a flex column so the visible section gets a BOUNDED height (flex:1 + min-height:0).
+     A plain height:100% chain here is fragile and let the chat composer overflow below the viewport. */
+  #sections{ flex:1; min-width:0; overflow:hidden; display:flex; flex-direction:column; }
+  #sections > section{ flex:1; min-height:0; }
+  #settings{ overflow-y:auto; }
+  .setbody{ min-height:100%; }
   .page{ max-width:1000px; margin:0 auto; padding:22px 26px 60px; }
   .seth{ color:var(--grntxt); font-size:14px; letter-spacing:1px; font-weight:600; margin:30px 0 4px; padding-bottom:8px; border-bottom:1px solid var(--line); }
   .page > .seth:first-child{ margin-top:6px; }
   .setdesc{ color:var(--dim); font-size:12px; margin:0 0 14px; }
   .muted{ color:var(--dim); font-weight:400; font-size:12px; }
-  #chat{ display:flex; flex-direction:row; height:100%; }
-  .convs{ width:var(--side); min-width:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:12px 10px; gap:3px; overflow-y:auto; }
-  .newchat{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:10px; letter-spacing:1px; }
-  .conv-h{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:8px 8px 4px; }
+  #chat{ display:flex; flex-direction:column; min-height:0; }
+  .newchat{ background:var(--grnpill); color:var(--grntxt); border:1px solid #1d3a2a; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:10px; letter-spacing:1px; flex-shrink:0; }
+  .conv-h{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:8px 8px 4px; flex-shrink:0; }
   .convitem{ padding:8px 10px; border-radius:6px; cursor:pointer; color:var(--dim); display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .convitem:hover{ background:#0f140e; } .convitem.active{ background:#10241a; color:var(--txt); }
   .convitem .t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .convmain{ flex:1; display:flex; flex-direction:column; min-width:0; padding:14px 24px; }
+  .convmain{ flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; padding:14px 24px; }  /* min-height:0 is REQUIRED so the chat log scrolls instead of pushing the composer off-screen */
   .convtitle, #chatlog, .composer{ width:100%; max-width:880px; margin-left:auto; margin-right:auto; }
   .convitem .ar{ color:var(--dim); border:none; background:none; cursor:pointer; opacity:0; font-size:13px; }
   .convitem:hover .ar{ opacity:.7; } .convitem .ar:hover{ opacity:1; color:var(--amber); }
   .archtoggle{ color:var(--dim); background:none; border:none; cursor:pointer; font-size:11px; letter-spacing:1px; padding:8px; text-align:left; }
   .convtitle{ color:var(--grntxt); font-size:12px; letter-spacing:1px; padding-bottom:10px; border-bottom:1px solid var(--line); margin-bottom:12px; }
-  #chatlog{ flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:4px 8px 4px 0; }
+  #chatlog{ flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; display:flex; flex-direction:column; gap:10px; padding:4px 8px 4px 0; }
   #chatlog::-webkit-scrollbar{ width:8px; } #chatlog::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
   .turnspacer{ height:min(70vh,560px); flex:0 0 auto; }
-  .row{ display:flex; flex-direction:column; gap:2px; max-width:100%; }
+  .row{ display:flex; flex-direction:column; gap:2px; max-width:100%; min-width:0; }
   .row.orow{ align-items:flex-end; } .row.jrow{ align-items:flex-start; }
   .turnhead{ color:var(--dim); font-size:10px; letter-spacing:1px; padding:0 4px; text-transform:uppercase; }
   .row .ts{ color:var(--dim); font-size:10px; padding:0 4px; }
@@ -126,10 +136,11 @@
   .slashhint{ padding:7px 12px; color:var(--dim); font-size:12px; font-family:monospace; }
   .msg{ font-size:13px; }
   .msg.jarvis{ white-space:normal; }                         /* markdown body controls its own spacing */
-  .mdbody div{ min-height:0; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
+  .msg.jarvis, .mdbody{ min-width:0; max-width:100%; overflow-wrap:anywhere; }   /* never let a long word/line of raw code force the chat wider */
+  .mdbody div{ min-height:0; overflow-wrap:anywhere; } .mdbody .sp{ height:8px; } .mdbody h2,.mdbody h3,.mdbody h4{ color:var(--grntxt); margin:10px 0 4px; }
   .mdbody ul{ margin:4px 0; padding-left:20px; } .mdbody code{ background:#0c140d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:12px; }
   .mdbody a.mdlink{ color:var(--grntxt); cursor:pointer; text-decoration:underline; }
-  .codeblk{ position:relative; margin:7px 0 10px; overflow:hidden; background:#111312; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .codeblk{ position:relative; margin:7px 0 10px; overflow:hidden; max-width:100%; min-width:0; background:#111312; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .codebar{ display:flex; justify-content:space-between; align-items:center; padding:4px 10px 3px; background:transparent; }
   .codelang{ color:var(--dim); font-size:10px; letter-spacing:0; } .copybtn{ background:none; border:none; color:var(--dim); font-size:13px; padding:1px 5px; border-radius:3px; cursor:pointer; opacity:.75; }
   .copybtn:hover{ color:var(--txt); opacity:1; } .codeblk pre{ margin:0; padding:8px 12px 12px; max-height:360px; overflow:auto; background:#1b1e1c; } .codeblk code{ background:transparent; border:0; padding:0; color:#bdc7bd; font-size:12px; white-space:pre; line-height:1.5; }
@@ -214,15 +225,31 @@
 <nav>
   <button type="button" id="tab-chat" class="active" onclick="show('chat')">CHAT <span id="qbadge" class="badge" hidden></span></button>
   <button type="button" id="tab-knowledge" onclick="show('knowledge')">KNOWLEDGE</button>
-  <button type="button" id="tab-settings" onclick="show('settings')">SETTINGS</button>
 </nav>
 <main>
-  <section id="chat">
-    <aside class="convs">
+  <!-- Persistent sidebar: visible in chat + settings modes; hidden in knowledge (has its own sidebar) -->
+  <aside id="sidebar">
+    <!-- default view: conversations; a single SETTINGS button pinned at the bottom -->
+    <div id="side-convs">
       <button type="button" class="newchat" onclick="newChat()">+ New chat</button>
       <div class="conv-h">CONVERSATIONS</div>
       <div id="convlist"></div>
-    </aside>
+      <button type="button" class="sidelink side-settings-btn" onclick="openSideSettings('general')">⚙ SETTINGS</button>
+    </div>
+    <!-- settings nav view: slides in when a settings item is clicked -->
+    <div id="side-settings" hidden>
+      <button type="button" class="sidelink side-back" onclick="closeSideSettings()">← back</button>
+      <div class="conv-h">SETTINGS</div>
+      <button type="button" class="sidelink" id="stab-general"  onclick="showSet('general')">GENERAL</button>
+      <button type="button" class="sidelink" id="stab-models"   onclick="showSet('models')">BRAIN &amp; MODELS</button>
+      <button type="button" class="sidelink" id="stab-behavior" onclick="showSet('behavior')">BEHAVIOR</button>
+      <button type="button" class="sidelink" id="stab-skills"   onclick="showSet('skills')">SKILLS</button>
+      <button type="button" class="sidelink" id="stab-mcp"      onclick="showSet('mcp')">MCP</button>
+      <button type="button" class="sidelink" id="stab-activity" onclick="showSet('activity')">ACTIVITY</button>
+    </div>
+  </aside>
+  <div id="sections">
+  <section id="chat">
     <div class="convmain">
       <div id="convtitle" class="convtitle">—</div>
       <div id="chatlog"></div>
@@ -250,15 +277,6 @@
   <section id="settings" hidden>
     <!-- All settings inputs MUST stay inside #settings or the mid-edit guard in load() breaks
          (it skips re-render only while document.activeElement is inside #settings). -->
-    <aside class="setside" id="set-subnav">
-      <div class="conv-h">SETTINGS</div>
-      <button type="button" id="stab-general"  class="active" onclick="showSet('general')">GENERAL</button>
-      <button type="button" id="stab-models"   onclick="showSet('models')">BRAIN &amp; MODELS</button>
-      <button type="button" id="stab-behavior" onclick="showSet('behavior')">BEHAVIOR</button>
-      <button type="button" id="stab-skills"   onclick="showSet('skills')">SKILLS</button>
-      <button type="button" id="stab-mcp"      onclick="showSet('mcp')">MCP</button>
-      <button type="button" id="stab-activity" onclick="showSet('activity')">ACTIVITY</button>
-    </aside>
     <div class="setbody">
     <div class="page">
       <div id="setpane-general" class="setpane">
@@ -291,7 +309,7 @@
       </div>
       <div id="setpane-mcp" class="setpane" hidden>
         <h2 class="seth">MCP servers</h2>
-        <div class="setdesc">Model Context Protocol servers (provider-agnostic). Jarvis spawns each one and exposes its tools to whatever brain is selected. stdio transport.</div>
+        <div class="setdesc">Model Context Protocol servers (provider-agnostic). Jarvis spawns each one and exposes its tools to whatever brain is selected. Supports local stdio servers and remote HTTP servers with OAuth Connect.</div>
         <div id="set-mcp"></div>
       </div>
       <div id="setpane-activity" class="setpane" hidden>
@@ -309,20 +327,35 @@
     </div>
     </div>
   </section>
+  </div><!-- #sections -->
 </main>
 <script>
+let _sidebarPrev = 'chat';
 function show(id){
   for(const s of ['chat','knowledge','settings']){ const el=document.getElementById(s); if(el) el.hidden=(s!==id); }
+  // sidebar is shared by chat + settings; hide it only for knowledge (which has its own .kdocs sidebar)
+  const sb=document.getElementById('sidebar'); if(sb) sb.hidden=(id==='knowledge');
   for(const b of document.querySelectorAll('nav button')) b.classList.remove('active');
   const t=document.getElementById('tab-'+id); if(t) t.classList.add('active');
+  if(id!=='settings'){ _sidebarPrev=id; }
 }
 // Settings sub-tabs: toggle pane visibility only (never re-render — so it can't wipe typing and
 // stays independent of _cfgSig). All panes remain in the DOM; load() keeps repopulating them.
 function showSet(id){
   for(const s of ['general','models','behavior','skills','mcp','activity']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
-  for(const b of document.querySelectorAll('#set-subnav button')) b.classList.remove('active');
+  for(const b of document.querySelectorAll('#side-settings .sidelink:not(.side-back)')) b.classList.remove('active');
   const t=document.getElementById('stab-'+id); if(t) t.classList.add('active');
   if(id==='mcp') loadMcp();   // probe servers lazily (spawns them) only when the tab is opened
+}
+function openSideSettings(id){
+  const sc=document.getElementById('side-convs'); if(sc) sc.hidden=true;
+  const ss=document.getElementById('side-settings'); if(ss) ss.hidden=false;
+  show('settings'); showSet(id);
+}
+function closeSideSettings(){
+  const sc=document.getElementById('side-convs'); if(sc) sc.hidden=false;
+  const ss=document.getElementById('side-settings'); if(ss) ss.hidden=true;
+  show(_sidebarPrev||'chat');
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
@@ -514,12 +547,13 @@ function mcpRowHTML(s){
       : '<button type="button" class="bigbtn" onclick="mcpConnect(\''+esc(s.name)+'\')">Connect</button>';
   }
   return '<div class="card mcp-row">'+
-    '<input class="mcp-name" placeholder="name (e.g. filesystem, facebook)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-name" placeholder="name (e.g. filesystem, higgsfield)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
     '<input class="mcp-url" placeholder="remote MCP url (https://… — uses the Connect/OAuth flow). Leave blank for a local server." value="'+esc(s.url||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
-    '<input class="mcp-clientid" placeholder="client_id — only if the server has no dynamic registration (e.g. your Meta App ID)" value="'+esc(s.client_id||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-scope" placeholder="OAuth scope (space-separated, e.g. openid email offline_access)" value="'+esc(s.scope||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-clientid" placeholder="client_id — only needed if the server does not support dynamic registration" value="'+esc(s.client_id||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
     '<input class="mcp-cmd" placeholder="OR local command (e.g. npx)" value="'+esc(s.command||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
     '<input class="mcp-args" placeholder="local args (space-separated)" value="'+esc((s.args||[]).join(' '))+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
-    '<textarea class="mcp-env" rows="2" placeholder="env — one KEY=VALUE per line. For secrets use a reference, NEVER the value:  META_ACCESS_TOKEN=${env:META_ACCESS_TOKEN}" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace">'+esc(Object.entries(s.env||{}).map(function(e){return e[0]+'='+e[1];}).join('\n'))+'</textarea>'+
+    '<textarea class="mcp-env" rows="2" placeholder="env — one KEY=VALUE per line. For secrets use a reference, NEVER the value:  HIGGSFIELD_API_KEY=${env:HIGGSFIELD_API_KEY}" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace">'+esc(Object.entries(s.env||{}).map(function(e){return e[0]+'='+e[1];}).join('\n'))+'</textarea>'+
     '<label style="display:inline-block;margin-right:12px"><input type="checkbox" class="mcp-enabled" '+(s.enabled===false?'':'checked')+'/> enabled</label>'+
     connectBtn+' '+
     '<button type="button" class="bigbtn" onclick="this.closest(\'.mcp-row\').remove()">Remove</button>'+
@@ -560,6 +594,7 @@ async function saveMcp(){
   const rows=[...document.querySelectorAll('#mcp-rows .mcp-row')].map(r=>({
     name:r.querySelector('.mcp-name').value.trim(),
     url:r.querySelector('.mcp-url').value.trim(),
+    scope:r.querySelector('.mcp-scope').value.trim(),
     client_id:r.querySelector('.mcp-clientid').value.trim(),
     command:r.querySelector('.mcp-cmd').value.trim(),
     args:r.querySelector('.mcp-args').value.trim(),
@@ -885,6 +920,7 @@ function renderKnowledge(docs){
       }
     }
   }
+  list+='<button type="button" class="sidelink side-settings-btn" onclick="openSideSettings(\'general\')">⚙ SETTINGS</button>';
   el.innerHTML='<div class="kwrap"><div class="kdocs">'+list+'</div><div class="kbody">'+md(knowledgeDocs[knowledgeSel].content)+'</div></div>';
 }
 const JARVIS_ART = [
@@ -965,8 +1001,10 @@ async function load(){
   const item=(c,isArch)=>{
     const act=c.id===activeConv?' active':'';
     const badge=c.open_q?`<span class="badge">${c.open_q}</span>`:'';
-    const btn=isArch?`<button type="button" class="ar" title="unarchive" onclick="event.stopPropagation();archiveConv('${c.id}',false)">⤴</button>`
-                    :`<button type="button" class="ar" title="archive" onclick="event.stopPropagation();archiveConv('${c.id}',true)">×</button>`;
+    const btn=isArch
+      ?`<button type="button" class="ar" title="unarchive" onclick="event.stopPropagation();archiveConv('${c.id}',false)">⤴</button>`+
+       `<button type="button" class="ar" title="delete permanently" onclick="event.stopPropagation();deleteConv('${c.id}')">🗑</button>`
+      :`<button type="button" class="ar" title="archive" onclick="event.stopPropagation();archiveConv('${c.id}',true)">×</button>`;
     return `<div class="convitem${act}" onclick="selectConv('${c.id}')"><span class="t">${esc(c.title)}</span><span>${badge}${btn}</span></div>`;
   };
   for(const c of active) clist.insertAdjacentHTML('beforeend', item(c,false));
@@ -1160,6 +1198,12 @@ function toggleArch(){ showArch=!showArch; load(); }
 async function archiveConv(id,val){
   await fetch('/api/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:id,archived:val})});
   if(activeConv===id && val) activeConv=null;
+  load();
+}
+async function deleteConv(id){
+  if(!confirm('Permanently delete this conversation? This cannot be undone.')) return;
+  await fetch('/api/delete_conv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conv:id})});
+  if(activeConv===id) activeConv=null;
   load();
 }
 function selectConv(id){ activeConv=id; _focusLatestTurn=true; _chatSig=''; _chatIds=''; load(); }

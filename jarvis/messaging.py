@@ -60,6 +60,25 @@ def archive(conv: str, archived: bool = True) -> None:
     _save_meta(m)
 
 
+def delete_conv(conv: str) -> int:
+    """Permanently delete all messages for a conversation and remove its metadata entry.
+    Returns the number of messages deleted."""
+    deleted = 0
+
+    def fn(rows):
+        nonlocal deleted
+        keep = [r for r in rows if r.get("conv") != conv]
+        deleted = len(rows) - len(keep)
+        rows[:] = keep
+        return deleted > 0
+
+    _mutate(fn)
+    m = _meta()
+    m.pop(conv, None)
+    _save_meta(m)
+    return deleted
+
+
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 

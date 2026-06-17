@@ -73,22 +73,37 @@ workers:
   fixer:    {cmd: ["echo","[fixer] would open a PR for {target}"], action_class: fix_pr}
 
 # MCP (Model Context Protocol) servers — provider-agnostic. Jarvis is the MCP client: it spawns
-# each server, lists its tools, and exposes them to ANY brain backend (claude/codex/ollama/...) the
-# same way as its built-in tools. Add servers here or from the dashboard's MCP settings tab.
-# Each: {name, command, args, env, enabled}. stdio transport (v1).
+# stdio servers or connects to remote HTTP servers, lists their tools, and exposes them to ANY
+# brain backend (claude/codex/ollama/...) the same way as built-in tools.
+# Add servers here or from the dashboard Settings → MCP tab.
 mcp:
   servers: []
+  # Local stdio server example:
   # - name: filesystem
   #   command: npx
   #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/expose"]
   #   enabled: true
-  # Servers that need API keys: reference a secret, never paste it here. ${env:NAME} (or $NAME)
-  # resolves from the environment at spawn time — put the real value in Jarvis's .env / a systemd
-  # EnvironmentFile / an Infisical wrapper, so config.yaml only ever holds the reference.
-  # - name: facebook
+  #
+  # Remote HTTP server (OAuth Connect flow — DCR supported, no manual app setup needed):
+  # - name: higgsfield
+  #   url: https://mcp.higgsfield.ai/mcp
+  #   scope: openid email offline_access    # optional — auto-discovered if omitted
+  #   enabled: true
+  #
+  # Remote HTTP server with manual client_id (server does not support dynamic registration):
+  # - name: my-server
+  #   url: https://example.com/mcp
+  #   client_id: your-app-id
+  #   scope: read write
+  #   enabled: true
+  #
+  # Servers that need API keys: reference a secret, never paste the value here.
+  # ${env:NAME} resolves from the environment at spawn time — put the real value in Jarvis's .env,
+  # a systemd EnvironmentFile, or an Infisical wrapper. config.yaml only ever holds the reference.
+  # - name: my-stdio-server
   #   command: npx
-  #   args: ["-y", "<the-facebook-mcp-package>"]
-  #   env: { META_ACCESS_TOKEN: "${env:META_ACCESS_TOKEN}" }
+  #   args: ["-y", "some-mcp-server"]
+  #   env: { API_KEY: "${env:MY_API_KEY}" }
   #   enabled: true
 
 # Wake triggers

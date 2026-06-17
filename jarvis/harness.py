@@ -163,6 +163,10 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         + "- Keep negative findings scoped to the evidence: say 'I found no matching X in Y' instead of 'there is no X' unless the evidence proves the universal claim.\n"
         + "- If evidence is missing, say what is missing and record the gap during reflection.\n"
         + "- If relevant learning gaps are included, say this is a known unresolved gap and name the next evidence needed. Do not answer as if the gap was never recorded.\n"
+        + "\nAnswering contract (applies to every model):\n"
+        + "- When reviewing, auditing, or analyzing code or files, report FINDINGS, not file contents. Cite each location as `path:line` and summarize what is wrong and why.\n"
+        + "- Do NOT paste whole files, functions, or long verbatim excerpts into your reply. Quote only the few specific lines needed to make a point, inside a fenced ``` code block, and reference the rest by `path:line`.\n"
+        + "- Prefer a short, scannable answer (bullets, headers) over a wall of text. If the full output is genuinely large, give the summary first and offer to expand a specific part on request.\n"
         + f"\nConversation so far:\n{transcript}\n"
     )
     return {

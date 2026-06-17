@@ -18,13 +18,69 @@ DEFAULT_BACKENDS = {
 #   ollama_cloud: {http: "https://ollama.com/v1/chat/completions", api_key_env: OLLAMA_API_KEY}
 # This covers Ollama Cloud and any OpenAI-compatible API (subscription key, no local CLI needed).
 
-# Reasoning controls, applied per role from llm.params (set in the dashboard). Only models that
-# support them are offered the dropdowns; here we translate the chosen level to each backend's API.
+# Reasoning controls, applied per role from llm.params (set in the dashboard). The capability model
+# is the SINGLE source of truth for "which control + which options" per backend, shared by the
+# dashboard (to render the chip) and the apply sites below (to send the right flag/param). See
+# docs/reasoning-controls-research.md — the option sets differ per backend and were verified live:
+#   claude CLI : --effort   low/medium/high/xhigh/max          (native flag; NOT a thinking keyword)
+#   codex CLI  : -c model_reasoning_effort=  minimal/low/medium/high
+#   openai http: reasoning_effort  minimal/low/medium/high
+#   ollama http: reasoning_effort  low/medium/high  (only honored by models whose caps include 'thinking')
+#   anthropic  : thinking budget_tokens  low/medium/high/max   (API-key path only)
+EFFORT_CLAUDE = ["low", "medium", "high", "xhigh", "max"]
+EFFORT_CODEX = ["minimal", "low", "medium", "high"]
+EFFORT_OPENAI = ["minimal", "low", "medium", "high"]
+EFFORT_OLLAMA = ["low", "medium", "high"]
+THINKING_ANTHROPIC = ["low", "medium", "high", "max"]
 _THINK_BUDGET = {"low": 4000, "medium": 10000, "high": 24000, "max": 32000}   # Anthropic thinking budget_tokens
-_THINK_KEYWORD = {"low": "\n\nThink about this carefully.",          # claude CLI honors think/ultrathink
-                  "medium": "\n\nThink hard about this.",
-                  "high": "\n\nUltrathink about this.",
-                  "max": "\n\nUltrathink as hard as you possibly can about this."}
+
+
+def backend_kind(name: str, spec) -> str:
+    """Classify a backend so capability/apply logic keys off WHAT it is, not just its config name.
+    The same Claude model is 'effort' via the CLI but 'thinking' via the API — kind captures that."""
+    if isinstance(spec, dict) and spec.get("http"):
+        if spec.get("format") == "anthropic":
+            return "anthropic_http"
+        if "ollama" in (spec.get("http") or "").lower():
+            return "ollama_http"
+        return "openai_http"
+    if name == "claude":
+        return "claude_cli"
+    if name == "codex":
+        return "codex_cli"
+    if name == "ollama":
+        return "ollama_local"
+    return "cli"
+
+
+def reasoning_caps(kind: str, model_caps=None) -> dict:
+    """The reasoning control a backend kind exposes: {"control": "effort"|"thinking"|None, "options":[...]}.
+    For ollama, effort is real only when the model's /api/show caps include 'thinking' (else None)."""
+    if kind == "claude_cli":
+        return {"control": "effort", "options": EFFORT_CLAUDE}
+    if kind == "codex_cli":
+        return {"control": "effort", "options": EFFORT_CODEX}
+    if kind == "openai_http":
+        return {"control": "effort", "options": EFFORT_OPENAI}
+    if kind == "anthropic_http":
+        return {"control": "thinking", "options": THINKING_ANTHROPIC}
+    if kind in ("ollama_http", "ollama_local"):
+        if model_caps and "thinking" in model_caps:
+            return {"control": "effort", "options": EFFORT_OLLAMA}
+        return {"control": None, "options": []}
+    return {"control": None, "options": []}
+
+
+def reasoning_value(kind: str, params: dict, model_caps=None) -> str:
+    """Resolve the reasoning level to apply for this backend from per-role params. Prefers the control's
+    own key (effort/thinking) but falls back to the other so a generic hint (e.g. think='medium' from the
+    chat) reaches every backend. Returns '' when there's nothing valid to apply."""
+    caps = reasoning_caps(kind, model_caps)
+    if not caps["control"]:
+        return ""
+    val = str((params or {}).get(caps["control"]) or (params or {}).get("effort")
+              or (params or {}).get("thinking") or "")
+    return val if (val and val != "default" and val in caps["options"]) else ""
 
 
 def _img_media_type(path):
@@ -68,11 +124,12 @@ class RoutingLLM:
         if not Path(workspace).exists():
             workspace = os.getcwd()
         cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
-        effort, thinking = params.get("effort"), params.get("thinking")
-        if backend == "claude" and thinking in _THINK_KEYWORD:      # claude CLI: extended thinking via keyword
-            prompt = prompt + _THINK_KEYWORD[thinking]
-        if backend == "codex" and effort and effort != "default":   # codex CLI: reasoning-effort config override
-            cmd = cmd[:2] + ["-c", f"model_reasoning_effort={effort}"] + cmd[2:]
+        kind = backend_kind(backend, spec)
+        level = reasoning_value(kind, params)
+        if kind == "claude_cli" and level:                          # claude CLI: native --effort flag
+            cmd += ["--effort", level]
+        elif kind == "codex_cli" and level:                         # codex CLI: reasoning-effort config override
+            cmd = cmd[:2] + ["-c", f"model_reasoning_effort={level}"] + cmd[2:]
         final_path = None
         if backend == "codex":
             fd, final_path = tempfile.mkstemp(prefix="jarvis-codex-final-", suffix=".txt")
@@ -102,13 +159,14 @@ class RoutingLLM:
         """HTTP chat backend: OpenAI-compatible by default (Ollama Cloud, OpenAI, OpenRouter, ...),
         or the Anthropic Messages API when spec.format == 'anthropic'."""
         params = params or {}
-        effort, thinking = params.get("effort"), params.get("thinking")
+        kind = backend_kind("", spec)
         key = os.environ.get(spec.get("api_key_env", ""), "")
         if spec.get("format") == "anthropic":
+            level = reasoning_value(kind, params)                  # thinking budget (control = thinking)
             payload = {"model": model, "max_tokens": 4096,
                        "messages": [{"role": "user", "content": prompt}]}
-            if thinking in _THINK_BUDGET:                          # extended thinking (budget must be < max_tokens)
-                budget = _THINK_BUDGET[thinking]
+            if level in _THINK_BUDGET:                             # extended thinking (budget must be < max_tokens)
+                budget = _THINK_BUDGET[level]
                 payload["max_tokens"] = budget + 4096
                 payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
             body = json.dumps(payload).encode()
@@ -123,8 +181,11 @@ class RoutingLLM:
                 raise RuntimeError("empty response from Anthropic backend")
             return text
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False}
-        if effort and effort != "default":                        # OpenAI / o-series / gpt-5 reasoning effort
-            payload["reasoning_effort"] = effort
+        # OpenAI-style reasoning_effort. model_caps=["thinking"] forces the apply (the per-model caps gate
+        # is a UI concern; ollama silently ignores reasoning_effort for non-thinking models — verified safe).
+        level = reasoning_value(kind, params, model_caps=["thinking"])
+        if level:
+            payload["reasoning_effort"] = level
         body = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
         if key:
@@ -172,7 +233,8 @@ class RoutingLLM:
             spec = self.backends.get(backend)
             try:
                 if backend == "claude" and not (isinstance(spec, dict) and spec.get("http")):
-                    return self._stream_claude_cli(model, prompt, emit, timeout, params, should_cancel, images)
+                    return self._stream_claude_cli(model, prompt, emit, timeout, params, should_cancel,
+                                                   images, enable_mcp=bool(tools))
                 if isinstance(spec, dict) and spec.get("http") and spec.get("format") != "anthropic":
                     return self._stream_http_openai(spec, model, prompt, emit, timeout, params, should_cancel, images, tools)
                 out = self._invoke(backend, model, prompt, timeout, params)   # non-streamable -> one-shot
@@ -185,13 +247,41 @@ class RoutingLLM:
                 continue
         raise RuntimeError(f"no usable streaming backend for role '{role}' (tried: {tried})")
 
-    def _stream_claude_cli(self, model, prompt, on_delta, timeout, params, should_cancel=None, images=None):
+    def _claude_mcp_flags(self):
+        """Give the `claude` CLI backend Jarvis's MCP servers via Claude Code's native --mcp-config
+        (it can't use Jarvis's in-process tool registry). Returns (extra_args, cleanup_path). The temp
+        config holds a live OAuth Bearer for HTTP servers, so it's written 0600 and deleted after use.
+        --strict-mcp-config => only these servers (ignore the user's global ~/.claude config).
+        --allowedTools mcp__<server> => pre-approve MCP tools so they run non-interactively (-p mode).
+        Built-in tools (Read/Bash/...) are unaffected: allowedTools is additive, not restrictive."""
+        try:
+            from jarvis import mcp
+            from jarvis.config import load
+            conf, allowed = mcp.claude_cli_config(load())
+        except Exception:
+            return [], None
+        if not conf.get("mcpServers"):
+            return [], None
+        fd, path = tempfile.mkstemp(prefix="jarvis-mcp-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(conf, f)                               # mkstemp is 0600 — bearer token stays private
+        args = ["--mcp-config", path, "--strict-mcp-config"]
+        if allowed:
+            args += ["--allowedTools", ",".join(allowed)]
+        return args, path
+
+    def _stream_claude_cli(self, model, prompt, on_delta, timeout, params, should_cancel=None, images=None,
+                           enable_mcp=False):
         import subprocess
-        thinking = params.get("thinking")
-        if thinking in _THINK_KEYWORD:                       # ask Opus to actually think (visible block)
-            prompt = prompt + _THINK_KEYWORD[thinking]
         cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json",
                "--include-partial-messages", "--verbose"]
+        level = reasoning_value("claude_cli", params)        # native --effort (replaces the old keyword hack)
+        if level:
+            cmd += ["--effort", level]
+        mcp_cleanup = None
+        if enable_mcp:                                       # let the CLI natively use Jarvis's MCP servers
+            mcp_args, mcp_cleanup = self._claude_mcp_flags()
+            cmd += mcp_args
         if images:                                           # vision: send text + image blocks via stream-json input
             content = [{"type": "text", "text": prompt}]
             for path in images:
@@ -260,6 +350,11 @@ class RoutingLLM:
                     p.kill(); p.wait(timeout=5)
                 except Exception:
                     pass
+            if mcp_cleanup:                  # remove the temp MCP config (it held a live bearer token)
+                try:
+                    os.unlink(mcp_cleanup)
+                except Exception:
+                    pass
         # A timeout with NO output is a real failure (fail over); a timeout WITH partial text keeps it.
         if not full and not (should_cancel and should_cancel()):
             raise RuntimeError("claude stream timed out with no text" if timed_out["v"]
@@ -280,9 +375,11 @@ class RoutingLLM:
         payload = {"model": model, "messages": messages, "stream": True}
         if tools:                                            # NATIVE structured tool-calling (deterministic)
             payload["tools"] = tools
-        effort = params.get("effort")
-        if effort and effort != "default":
-            payload["reasoning_effort"] = effort
+        # model_caps=["thinking"] forces the apply (per-model gate is a UI concern); ollama safely
+        # ignores reasoning_effort for non-thinking models — verified in the research.
+        level = reasoning_value(backend_kind("", spec), params, model_caps=["thinking"])
+        if level:
+            payload["reasoning_effort"] = level
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"

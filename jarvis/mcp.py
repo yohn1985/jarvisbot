@@ -42,7 +42,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 _AUTH_DIR = _ROOT / "state" / "mcp-auth"      # persisted OAuth tokens (chmod 600; NOT in config.yaml)
 # Default OAuth redirect = loopback, so the dashboard never needs to be exposed or have a cert.
 # The provider only redirects the BROWSER here; it never connects inbound. Override via mcp.oauth.
-_DEFAULT_REDIRECT = "http://127.0.0.1:8787/api/mcp/oauth/callback"
+# Use the hostname "localhost", NOT the IP 127.0.0.1: many OAuth servers (e.g. Clerk/Higgsfield)
+# allow an http redirect only for hosts with the "localhost" suffix and reject the bare IP.
+_DEFAULT_REDIRECT = "http://localhost:8787/api/mcp/oauth/callback"
 _PENDING: dict[str, dict] = {}                # state -> in-flight auth (verifier, endpoints, ...)
 
 _CLIENTS: dict[str, "MCPClient"] = {}
@@ -376,15 +378,26 @@ def _register_client(meta: dict, redirect_uri: str) -> dict:
     return {}
 
 
-def begin_auth(cfg: dict, name: str) -> dict:
+def begin_auth(cfg: dict, name: str, base_redirect: str | None = None) -> dict:
     """Start the OAuth Connect flow for an http MCP server: discover, register, build the authorize
-    URL (PKCE). The dashboard opens that URL; the provider redirects the BROWSER back to the loopback
-    callback. Returns {ok, authorize_url}."""
+    URL (PKCE). The dashboard opens that URL; the provider redirects the BROWSER back to the callback.
+    Returns {ok, authorize_url}.
+
+    The redirect MUST be an address the user's browser can actually reach. The provider redirects the
+    BROWSER (not Jarvis) there, so loopback (127.0.0.1) only works when the browser runs on the same
+    host as the dashboard. When the dashboard is opened over the LAN, the caller passes the request's
+    own scheme+Host as `base_redirect` so the browser is sent back to the same origin it's already on.
+    Precedence: an explicit config `mcp.oauth_redirect` > the request-derived `base_redirect` > loopback."""
     raw = ((cfg.get("mcp") or {}).get("servers")) or []
     spec = next((s for s in raw if _san(s.get("name")) == _san(name)), None)
     if not spec or not spec.get("url"):
         return {"ok": False, "error": "not an HTTP MCP server"}
-    url = spec["url"]; redirect = _redirect_uri(cfg)
+    url = spec["url"]
+    redirect = (((cfg or {}).get("mcp") or {}).get("oauth_redirect")
+                or base_redirect or _DEFAULT_REDIRECT)
+    # Normalize the loopback IP to the "localhost" hostname: equivalent for routing, but OAuth servers
+    # that gate http redirects on a "localhost" suffix reject the bare 127.0.0.1 form.
+    redirect = redirect.replace("//127.0.0.1:", "//localhost:").replace("//127.0.0.1/", "//localhost/")
     st, hdrs, _b = _http(url, method="POST", timeout=15, headers={"Accept": "application/json, text/event-stream"},
                          data={"jsonrpc": "2.0", "id": 1, "method": "initialize",
                                "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
@@ -393,11 +406,21 @@ def begin_auth(cfg: dict, name: str) -> dict:
     if not meta.get("authorization_endpoint") or not meta.get("token_endpoint"):
         return {"ok": False, "error": "could not discover the server's OAuth endpoints"}
     saved = _load_tokens(name)
-    # Prefer an explicitly configured client (e.g. a Meta App ID — Meta doesn't allow dynamic
-    # registration); else a previously registered one; else try dynamic client registration.
-    cid = spec.get("client_id") or saved.get("client_id")
-    secret = _resolve_secret(spec.get("client_secret") or saved.get("client_secret", ""))
-    client = {"client_id": cid, "client_secret": secret} if cid else _register_client(meta, redirect)
+    # Pick the OAuth client in priority order:
+    #  1. An explicitly configured client_id (e.g. a Meta App ID — Meta forbids dynamic registration).
+    #     The user owns that app's redirect-URI allowlist, so we never re-register it.
+    #  2. A previously DCR-registered client, BUT only if it was registered for THIS redirect. A saved
+    #     client registered under a different redirect (port/host changed, or an old build) makes the
+    #     provider reject the authorize call with "redirect_uri does not match" — so re-register instead.
+    #  3. Otherwise, dynamic client registration (RFC 7591) against the current redirect.
+    if spec.get("client_id"):
+        client = {"client_id": spec["client_id"],
+                  "client_secret": _resolve_secret(spec.get("client_secret") or saved.get("client_secret", ""))}
+    elif saved.get("client_id") and saved.get("redirect") == redirect:
+        client = {"client_id": saved["client_id"],
+                  "client_secret": _resolve_secret(saved.get("client_secret", ""))}
+    else:
+        client = _register_client(meta, redirect)
     if not client.get("client_id"):
         return {"ok": False, "error": "this server requires a registered app — set a client_id on the "
                 "server (e.g. your Meta App ID) and add the redirect URI to that app: " + redirect}
@@ -413,7 +436,8 @@ def begin_auth(cfg: dict, name: str) -> dict:
     authorize_url = meta["authorization_endpoint"] + sep + urllib.parse.urlencode(params)
     _PENDING[state] = {"name": name, "verifier": verifier, "redirect": redirect,
                        "token_endpoint": meta["token_endpoint"], "client": client, "resource": url}
-    saved.update({"client_id": client["client_id"], "client_secret": client.get("client_secret", "")})
+    saved.update({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
+                  "redirect": redirect})   # remember the redirect this client was registered for
     _save_tokens(name, saved)
     return {"ok": True, "authorize_url": authorize_url}
 
@@ -627,6 +651,58 @@ def probe(cfg: dict) -> list[dict]:
             "tools": [t.get("name") for t in c.tools] if ok else [],
         })
     return out
+
+
+def _fresh_bearer(name: str) -> str:
+    """Current access token for an HTTP MCP server, refreshed if within 60s of expiry. '' if not authed.
+    Used to inject a live Bearer into a config we hand to another agent (e.g. the Claude CLI)."""
+    t = _load_tokens(name)
+    if not t.get("access_token"):
+        return ""
+    if (t.get("expires_at") and time.time() > float(t["expires_at"]) - 60
+            and t.get("refresh_token") and t.get("token_endpoint")):
+        data = {"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": t.get("client_id", "")}
+        if t.get("client_secret"):
+            data["client_secret"] = t["client_secret"]
+        if t.get("resource"):
+            data["resource"] = t["resource"]
+        st, _h, j = _http(t["token_endpoint"], method="POST", timeout=20, data=urllib.parse.urlencode(data),
+                          headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+        if isinstance(j, dict) and j.get("access_token"):
+            t["access_token"] = j["access_token"]; t["expires_at"] = time.time() + int(j.get("expires_in", 3600))
+            if j.get("refresh_token"):
+                t["refresh_token"] = j["refresh_token"]
+            _save_tokens(name, t)
+    return t.get("access_token", "")
+
+
+def claude_cli_config(cfg: dict) -> tuple[dict, list[str]]:
+    """Build a Claude Code CLI `--mcp-config` (an {"mcpServers": {...}} map) plus the allowedTools list,
+    so the `claude` CLI backend can use the SAME MCP servers Jarvis is configured with. The CLI is its
+    own agent and can't see Jarvis's in-process tool registry, so we hand it a native config instead:
+      - HTTP servers get the stored OAuth Bearer injected (refreshed) — no second OAuth dance.
+      - stdio servers get their command/args + env (with ${env:..} secret refs resolved at spawn).
+    Returns ({"mcpServers": {...}}, ["mcp__<server>", ...]); the allowedTools entries pre-approve every
+    tool from each server so the CLI can call them non-interactively in -p mode."""
+    servers: dict = {}
+    allowed: list[str] = []
+    for spec in servers_from_cfg(cfg):
+        name = _san(spec.get("name"))
+        if spec.get("url"):
+            tok = _fresh_bearer(name)
+            if not tok:
+                continue                                  # not authorized yet -> the CLI can't use it
+            entry = {"type": "http", "url": spec["url"], "headers": {"Authorization": f"Bearer {tok}"}}
+        elif spec.get("command"):
+            entry = {"command": spec["command"], "args": [str(a) for a in (spec.get("args") or [])]}
+            env = {str(k): _resolve_secret(str(v)) for k, v in (spec.get("env") or {}).items()}
+            if env:
+                entry["env"] = env
+        else:
+            continue
+        servers[name] = entry
+        allowed.append(f"{_PREFIX}{name}")                # mcp__<server> = allow all tools from that server
+    return {"mcpServers": servers}, allowed
 
 
 def shutdown() -> None:
