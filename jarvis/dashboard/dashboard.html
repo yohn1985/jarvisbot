@@ -263,8 +263,8 @@
         <div class="composer-bar">
           <div class="chips">
             <span class="chip editable" title="change model" onclick="openChipPop('model')"><span class="cdot"></span><span id="chip-model">brain</span> <span class="chipcar">▾</span></span>
-            <span class="chip editable" id="chip-effort" title="change effort/thinking" onclick="openChipPop('effort')" hidden></span>
-            <span class="chip" id="chip-ctx" title="conversation tokens / model context window" hidden></span>
+            <span class="chip editable" id="chip-effort" title="change effort / thinking / context" onclick="openChipPop('effort')" hidden></span>
+            <span class="chip editable" id="chip-ctx" title="change context window" onclick="openChipPop('effort')" hidden></span>
             <span class="chip editable" id="chip-mode" title="change autonomy mode" onclick="openChipPop('mode')">shadow</span>
           </div>
           <div class="composer-actions">
@@ -392,7 +392,7 @@ function reasoningChipText(mi){
   return parts.join(' · ');
 }
 function applyModelInfo(mi,msgs){
-  _ctxWindow=(mi&&mi.context_window)||0; updateCtxChip(msgs);
+  _ctxWindow=(mi&&mi.context)||(mi&&mi.context_window)||0; updateCtxChip(msgs);   // chosen window (e.g. 1M)
   const ce=document.getElementById('chip-effort'); if(!ce) return;
   const label=reasoningChipText(mi);
   if(label){ ce.textContent=label; ce.hidden=false; }
@@ -420,7 +420,9 @@ async function openChipPop(kind){
     const effort=controls.effort||{}, thinking=controls.thinking||{};
     if(effort.supported) r+='<div class="poprow"><label>effort</label><select id="pop-effort">'+(effort.options||['default']).map(o=>`<option${o===controlValue(effort,'effort',params)?' selected':''}>${esc(o)}</option>`).join('')+'</select></div>';
     if(thinking.supported) r+='<div class="poprow"><label>thinking</label><select id="pop-think">'+(thinking.options||['default']).map(o=>`<option${o===controlValue(thinking,'thinking',params)?' selected':''}>${esc(o)}</option>`).join('')+'</select></div>';
-    html=(r||'<div class="popnote">This model exposes no effort/thinking control.</div>')+(r?'<button type="button" class="popsave" onclick="saveChipEffort()">Save</button>':'');
+    const ctxOpts=mi.context_options||[]; const curCtx=(params.context||mi.context||mi.context_window||0);
+    if(ctxOpts.length>1) r+='<div class="poprow"><label>context</label><select id="pop-ctx">'+ctxOpts.map(o=>`<option value="${o}"${(+o)===(+curCtx)?' selected':''}>${ctxLabel(o)}</option>`).join('')+'</select></div>';
+    html=(r||'<div class="popnote">This model exposes no effort/thinking/context control.</div>')+(r?'<button type="button" class="popsave" onclick="saveChipEffort()">Save</button>':'');
   } else if(kind==='mode'){
     const cur=(cfg.identity||{}).mode||'shadow';
     html='<div class="poprow"><label>mode</label><select id="pop-mode">'+['shadow','active','autonomous'].map(o=>`<option${o===cur?' selected':''}>${o}</option>`).join('')+'</select></div>'
@@ -437,7 +439,7 @@ async function saveChip(patch){ const m=document.getElementById('pop-msg'); if(m
     if(j.ok){ _cfgSig=null; _miRoute=null; setTimeout(closeChipPop,700); load(); }
   }catch(e){ if(m){ m.textContent='✕ '+e; m.style.color='#e88'; } } }
 function saveChipModel(){ const p=document.getElementById('pop-pool').value, mo=document.getElementById('pop-model').value; if(mo) saveChip({routing:{orchestrator:p+':'+mo}}); }
-function saveChipEffort(){ const e=document.getElementById('pop-effort'), t=document.getElementById('pop-think'); const p={}; if(e)p.effort=e.value; if(t)p.thinking=t.value; saveChip({params:{orchestrator:p}}); }
+function saveChipEffort(){ const e=document.getElementById('pop-effort'), t=document.getElementById('pop-think'), c=document.getElementById('pop-ctx'); const p={}; if(e)p.effort=e.value; if(t)p.thinking=t.value; if(c)p.context=parseInt(c.value)||0; saveChip({params:{orchestrator:p}}); }
 function saveChipMode(){ saveChip({identity:{mode:document.getElementById('pop-mode').value}}); }
 document.addEventListener('click',e=>{ const pop=document.getElementById('chippop');
   if(pop && !pop.hidden && !pop.contains(e.target) && !(e.target.closest&&e.target.closest('.chip.editable'))) closeChipPop(); });
