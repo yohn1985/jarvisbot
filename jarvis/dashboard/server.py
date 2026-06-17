@@ -299,9 +299,15 @@ def _model_info(role="orchestrator", route: str | None = None,
         # the max, so this also defaults ollama to its full size.
         default_ctx = info["context_window"]
         chosen_ctx = default_ctx if default_ctx in ctx_options else (ctx_options[-1] if ctx_options else default_ctx)
+    # If 1M was chosen but a recent turn fell back for lack of usage credits, report the EFFECTIVE
+    # window (200K) so autocompaction sizes correctly (#15) and the UI can say so (#16).
+    context_note = ""
+    if kind == "claude_cli" and chosen_ctx >= 1000000 and _llm.one_m_unavailable():
+        chosen_ctx = 200000 if 200000 in ctx_options else chosen_ctx
+        context_note = "1M needs usage credits — using 200K"
     return {"role": role, "route": route, "pool": pool, "model": model or route,
             "context_window": info["context_window"], "capabilities": info["capabilities"],
-            "context_options": ctx_options, "context": chosen_ctx,
+            "context_options": ctx_options, "context": chosen_ctx, "context_note": context_note,
             "controls": controls, "effective_params": effective, "unsupported_params": unsupported,
             "effort": controls["effort"]["value"] if controls["effort"]["supported"] else None,
             "thinking": controls["thinking"]["value"] if controls["thinking"]["supported"] else None}

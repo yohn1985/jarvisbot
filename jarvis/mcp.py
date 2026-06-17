@@ -620,10 +620,14 @@ def call(full_name: str, arguments: dict, cfg: dict | None = None) -> dict:
     return c.call_tool(tool, arguments or {})
 
 
-def catalog(cfg: dict) -> str:
-    """Compact catalog of MCP tools for prompt injection so any model detects them."""
+def catalog(cfg: dict, for_cli: bool = False) -> str:
+    """Compact catalog of MCP tools for prompt injection so any model detects them. When `for_cli` (the
+    answering backend is the Claude CLI), only advertise servers the CLI is actually given via
+    --mcp-config — so we never list a tool the CLI can't call (see _expose_to_cli)."""
     lines = []
     for spec in servers_from_cfg(cfg):
+        if for_cli and not _expose_to_cli(spec):
+            continue
         c = _client(spec)
         if not c.connect():
             continue
@@ -676,6 +680,16 @@ def _fresh_bearer(name: str) -> str:
     return t.get("access_token", "")
 
 
+def _expose_to_cli(spec: dict) -> bool:
+    """Whether to hand this MCP server to the Claude CLI. Remote (HTTP) servers: yes — the CLI can't
+    reach them otherwise. Local stdio servers: NO by default — the CLI already has native file/shell
+    tools, and re-spawning a stdio server (e.g. `npx` filesystem) every turn adds latency. Set
+    `cli: true` on a stdio server to force-include one the CLI genuinely needs."""
+    if spec.get("url"):
+        return True
+    return bool(spec.get("cli"))
+
+
 def claude_cli_config(cfg: dict) -> tuple[dict, list[str]]:
     """Build a Claude Code CLI `--mcp-config` (an {"mcpServers": {...}} map) plus the allowedTools list,
     so the `claude` CLI backend can use the SAME MCP servers Jarvis is configured with. The CLI is its
@@ -687,6 +701,8 @@ def claude_cli_config(cfg: dict) -> tuple[dict, list[str]]:
     servers: dict = {}
     allowed: list[str] = []
     for spec in servers_from_cfg(cfg):
+        if not _expose_to_cli(spec):                       # stdio servers the CLI already covers (e.g.
+            continue                                       # filesystem) are skipped — see _expose_to_cli
         name = _san(spec.get("name"))
         if spec.get("url"):
             tok = _fresh_bearer(name)

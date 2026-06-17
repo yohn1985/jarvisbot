@@ -124,7 +124,13 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         skills_catalog = ""
     try:                                          # MCP tools (provider-agnostic) so the model sees them
         from jarvis import mcp as _mcp_mod
-        mcp_catalog = _mcp_mod.catalog(cfg)
+        from jarvis.adapters import llm as _llm_mod
+        # If the answering brain is the Claude CLI, only advertise MCP servers it's actually handed
+        # (HTTP + cli-forced stdio) — it can't call the stdio servers we skip for it.
+        _b = dict(_llm_mod.DEFAULT_BACKENDS); _b.update((cfg.get("llm") or {}).get("backends") or {})
+        _orch = ((cfg.get("llm") or {}).get("routing") or {}).get("orchestrator", "")
+        _for_cli = _llm_mod.backend_kind(_orch.split(":")[0], _b.get(_orch.split(":")[0])) == "claude_cli"
+        mcp_catalog = _mcp_mod.catalog(cfg, for_cli=_for_cli)
     except Exception:
         mcp_catalog = ""
     transcript = "\n".join(

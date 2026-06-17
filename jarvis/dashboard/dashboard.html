@@ -363,12 +363,13 @@ function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>'
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
 let booted=false, setupState=null, brainChoice=null, ollamaKeyDraft='', knowledgeDocs=[], knowledgeSel=0, _defaultSystemPrompt='';
 // composer context chip: detected window (from /api/model-info) + live token estimate of the convo
-let _miRoute=null, _ctxWindow=0;
+let _miRoute=null, _ctxWindow=0, _ctxNote='';
 function fmtTok(n){ n=+n||0; if(n>=1e6) return (n/1e6).toFixed(n%1e6?1:0)+'M'; if(n>=1000) return Math.round(n/1000)+'K'; return ''+n; }
 function updateCtxChip(msgs){ const cc=document.getElementById('chip-ctx'); if(!cc) return;
   if(!_ctxWindow){ cc.hidden=true; return; }
   let used=0; for(const m of (msgs||[])) used+=((m.text||'').length+(m.thinking||'').length); used=Math.round(used/4);
-  cc.textContent='ctx ~'+fmtTok(used)+'/'+fmtTok(_ctxWindow); cc.hidden=false;
+  cc.textContent='ctx ~'+fmtTok(used)+'/'+fmtTok(_ctxWindow)+(_ctxNote?' ⚠':'');   // ⚠ = a fallback note
+  cc.title=_ctxNote||'change context window'; cc.hidden=false;
 }
 async function modelInfoFor(role,pool,model){
   const qs=new URLSearchParams(); qs.set('role',role||'orchestrator');
@@ -392,7 +393,7 @@ function reasoningChipText(mi){
   return parts.join(' · ');
 }
 function applyModelInfo(mi,msgs){
-  _ctxWindow=(mi&&mi.context)||(mi&&mi.context_window)||0; updateCtxChip(msgs);   // chosen window (e.g. 1M)
+  _ctxWindow=(mi&&mi.context)||(mi&&mi.context_window)||0; _ctxNote=(mi&&mi.context_note)||''; updateCtxChip(msgs);   // chosen window (e.g. 1M)
   const ce=document.getElementById('chip-effort'); if(!ce) return;
   const label=reasoningChipText(mi);
   if(label){ ce.textContent=label; ce.hidden=false; }
@@ -422,6 +423,7 @@ async function openChipPop(kind){
     if(thinking.supported) r+='<div class="poprow"><label>thinking</label><select id="pop-think">'+(thinking.options||['default']).map(o=>`<option${o===controlValue(thinking,'thinking',params)?' selected':''}>${esc(o)}</option>`).join('')+'</select></div>';
     const ctxOpts=mi.context_options||[]; const curCtx=(params.context||mi.context||mi.context_window||0);
     if(ctxOpts.length>1) r+='<div class="poprow"><label>context</label><select id="pop-ctx">'+ctxOpts.map(o=>`<option value="${o}"${(+o)===(+curCtx)?' selected':''}>${ctxLabel(o)}</option>`).join('')+'</select></div>';
+    if(mi.context_note) r+='<div class="popnote">⚠ '+esc(mi.context_note)+' (<a href="https://claude.ai/settings/usage" target="_blank" style="color:var(--grntxt)">enable credits</a>)</div>';
     html=(r||'<div class="popnote">This model exposes no effort/thinking/context control.</div>')+(r?'<button type="button" class="popsave" onclick="saveChipEffort()">Save</button>':'');
   } else if(kind==='mode'){
     const cur=(cfg.identity||{}).mode||'shadow';

@@ -3,8 +3,39 @@ Generalizes ai-exec. Backends are CLI command templates in config ({model}/{prom
 {prompt} placeholder => prompt is piped on stdin). A routed backend that's absent or fails
 falls through to `fallbacks`. Stdlib only."""
 from __future__ import annotations
-import json, os, re, shutil, subprocess, tempfile, urllib.request
+import json, os, re, shutil, subprocess, tempfile, time, urllib.request
 from pathlib import Path
+
+# Claude 1M needs paid "usage credits". When a [1m] turn falls back to standard 200K because credits
+# aren't enabled, we record it here so the rest of the app reacts: autocompaction sizes to the REAL
+# (200K) window instead of 1M (issue #15), and the dashboard tells the user (issue #16). Cleared the
+# moment a [1m] turn succeeds; auto-expires so re-enabling credits is picked up without a restart.
+_STATE_DIR = Path(__file__).resolve().parent.parent.parent / "state"
+_ONE_M_FLAG = _STATE_DIR / "claude_1m_unavailable"
+_ONE_M_TTL = 6 * 3600
+
+
+def mark_1m_unavailable() -> None:
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _ONE_M_FLAG.write_text(str(time.time()))
+    except Exception:
+        pass
+
+
+def clear_1m_unavailable() -> None:
+    try:
+        _ONE_M_FLAG.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def one_m_unavailable() -> bool:
+    """True if a recent 1M turn fell back for lack of usage credits (within the TTL)."""
+    try:
+        return (time.time() - float(_ONE_M_FLAG.read_text().strip())) < _ONE_M_TTL
+    except Exception:
+        return False
 
 DEFAULT_BACKENDS = {
     "claude": ["claude", "-p", "--model", "{model}"],
@@ -430,10 +461,13 @@ class RoutingLLM:
         # standard 200K context of the SAME model (clear, non-fatal degrade vs. an opaque failure).
         if (not full and _allow_1m_retry and "[1m]" in model
                 and re.search(r"usage credits|1M context", err_blob, re.I)):
+            mark_1m_unavailable()                            # so compaction sizes to 200K + the UI says so
             std_params = {k: v for k, v in (params or {}).items() if k != "context"}
             return self._stream_claude_cli(model.replace("[1m]", ""), prompt, on_delta, timeout,
                                            std_params, should_cancel, images, enable_mcp,
                                            _allow_1m_retry=False)
+        if full and "[1m]" in model:                         # a 1M turn actually worked -> credits are on
+            clear_1m_unavailable()
         # A timeout/error with NO output is a real failure (surface a useful message; run() fails over).
         if not full:
             detail = err_blob.strip().splitlines()[-1][:160] if err_blob.strip() else ""
