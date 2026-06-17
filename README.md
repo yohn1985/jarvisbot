@@ -13,7 +13,7 @@
 environment, and stays propose-only until you trust it with real work.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-3fae5a.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-EARLY%20BETA-d8a13a.svg)
+![Status](https://img.shields.io/badge/status-BETA-d8a13a.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3fae5a.svg)
 ![Dependencies](https://img.shields.io/badge/core-stdlib%20only-3fae5a.svg)
 
@@ -25,7 +25,7 @@ environment, and stays propose-only until you trust it with real work.**
 
 </div>
 
-> ⚠️ **Early beta.** Jarvis can read, reason, and act on a real machine. Run it on a box you
+> ⚠️ **Beta.** Jarvis can read, reason, and act on a real machine. Run it on a box you
 > trust, keep it in the default **shadow / propose-only** mode until you've watched it, and read
 > the Safety section before granting it more.
 
@@ -73,7 +73,13 @@ wake → perceive → orient → decide (priority ladder) → act → reflect
 - **`jarvis/perceive.py`** — builds the world from durable signals (a source *outage* is surfaced,
   not silently treated as "nothing to do").
 - **`jarvis/adapters/llm.py`** — a model router: `role → backend:model`. CLI backends (Claude,
-  Codex, Ollama) and HTTP backends (OpenAI-compatible + Anthropic). Per-role effort/thinking.
+  Codex, Ollama) and HTTP backends (OpenAI-compatible + Anthropic). It detects each model's real
+  controls and exposes only those: **reasoning effort** (`--effort` for the Claude CLI,
+  `reasoning_effort` for Codex/OpenAI/Ollama, `thinking` budget for the Anthropic API) and the
+  **context window** — including the Claude **200K / 1M** variant and per-model `num_ctx` for Ollama.
+- **`jarvis/mcp.py`** — a provider-agnostic **MCP** host. Add Model Context Protocol servers (local
+  stdio or remote HTTP with OAuth 2.1) and their tools are offered to **whatever brain is answering** —
+  HTTP backends get them as native tool-calls; the Claude CLI gets them via its own `--mcp-config`.
 - **`jarvis/memory/`** — working memory (Redis, degrades to in-process) + episodic memory
   (Postgres, degrades to a JSONL ledger). Reflections are written **and read back**, so experience
   changes behavior.
@@ -83,19 +89,23 @@ wake → perceive → orient → decide (priority ladder) → act → reflect
   fitness gate → independent red-team → one-command rollback. Built and tested, but **nothing drives
   it autonomously yet** — the harness is ready for when self-editing lands. `self_modify` off by default.
 - **`skills/`** — shipped capabilities (web research, network discovery, deep code search,
-  youtube-research). Install deps with one click; run from chat with `/skill …`.
+  youtube-research). Install deps with one click; run from chat with `/skill …`. Add your own from
+  the dashboard (paste a `SKILL.md`) or just ask Jarvis to write one — they're auto-detected.
 
 ## The dashboard
 
 A zero-dependency (stdlib) web UI:
 
-- **Chat** — streaming replies token-by-token, a collapsible **Thought** block, markdown + code
-  blocks, image attachments (vision), steering (a new message interrupts the current one), and a
-  Stop button. Type `/` to run a skill.
+- **Chat** — streaming replies token-by-token, a collapsible **Thought** block, markdown + syntax-
+  highlighted code, **inline images** (vision in, and Jarvis can post images out), steering (a new
+  message interrupts the current one), and a Stop button. Type `/` to run a skill. Per-conversation
+  chips let you switch **model**, **effort/thinking**, and **context window** (e.g. Claude 200K↔1M)
+  inline, without leaving the chat.
 - **Knowledge** — what Jarvis has discovered and organized about its world.
-- **Activity** — kernel ticks, spawned workers, and live processes.
-- **Settings** — one page: **Brain & Models** (connect + routing), **Behavior** (identity, what it
-  may do on its own, priorities), **Skills**.
+- **Settings** (in the sidebar) — **Brain & Models** (connect a brain; route each role to a
+  `backend:model` with its detected effort + context controls and capability badges), **Behavior**
+  (identity, action classes, priorities, operating prompt), **Skills** (install / add), **MCP**
+  (add servers, one-click OAuth Connect), and **Activity** (kernel ticks, workers, live processes).
 
 ## Safety defaults (read this)
 
@@ -114,8 +124,10 @@ directly; `install.sh` never overwrites them.
 
 ## Status
 
-Early beta and moving fast. The core loop, memory, model router, dashboard, skills, and the
-self-modification **seatbelt** are in place. (The seatbelt is the safety harness — Jarvis does **not** autonomously edit its own code yet.) Expect rough edges; issues and PRs welcome.
+Beta and moving fast. The core loop, memory, multi-backend model router (with per-model effort +
+context controls), MCP support, the dashboard, skills, and the self-modification **seatbelt** are in
+place. (The seatbelt is the safety harness — Jarvis does **not** autonomously edit its own code yet.)
+Expect rough edges; issues and PRs welcome.
 
 ## Roadmap
 
