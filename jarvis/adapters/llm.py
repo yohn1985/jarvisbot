@@ -71,6 +71,33 @@ def reasoning_caps(kind: str, model_caps=None) -> dict:
     return {"control": None, "options": []}
 
 
+# Context-window selection. An ollama model runs at any num_ctx up to its max (verified: the cloud
+# OpenAI endpoint honors options.num_ctx), so we offer standard sizes up to the model's max and apply
+# the choice. Anthropic Sonnet has a 200K/1M(beta) split, but 1M needs an API key (the CLI refuses
+# --betas), so it's only offered on the anthropic_http backend. Everything else is a single fixed window.
+_CTX_STEPS = [16384, 32768, 65536, 131072, 262144, 524288, 1048576]
+
+
+def context_options(kind: str, max_window: int, model: str = "") -> list:
+    """Selectable context sizes (ints) for a backend/model. [single] when there's nothing to pick."""
+    mw = int(max_window or 0)
+    if kind in ("ollama_http", "ollama_local") and mw:
+        return sorted(set([s for s in _CTX_STEPS if s < mw] + [mw]))
+    if kind == "anthropic_http" and "sonnet" in (model or "").lower():
+        return [200000, 1000000]
+    return [mw] if mw else []
+
+
+def context_num_ctx(kind: str, params: dict) -> int:
+    """The num_ctx to apply for an ollama request from per-role params (0 = leave the server default)."""
+    if kind not in ("ollama_http", "ollama_local"):
+        return 0
+    try:
+        return int((params or {}).get("context") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def reasoning_value(kind: str, params: dict, model_caps=None) -> str:
     """Resolve the reasoning level to apply for this backend from per-role params. Prefers the control's
     own key (effort/thinking) but falls back to the other so a generic hint (e.g. think='medium' from the
@@ -186,6 +213,9 @@ class RoutingLLM:
         level = reasoning_value(kind, params, model_caps=["thinking"])
         if level:
             payload["reasoning_effort"] = level
+        nctx = context_num_ctx(kind, params)                  # ollama: run the model at the chosen context size
+        if nctx:
+            payload.setdefault("options", {})["num_ctx"] = nctx
         body = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
         if key:
@@ -377,9 +407,13 @@ class RoutingLLM:
             payload["tools"] = tools
         # model_caps=["thinking"] forces the apply (per-model gate is a UI concern); ollama safely
         # ignores reasoning_effort for non-thinking models — verified in the research.
-        level = reasoning_value(backend_kind("", spec), params, model_caps=["thinking"])
+        _kind = backend_kind("", spec)
+        level = reasoning_value(_kind, params, model_caps=["thinking"])
         if level:
             payload["reasoning_effort"] = level
+        nctx = context_num_ctx(_kind, params)                # ollama: run the model at the chosen context size
+        if nctx:
+            payload.setdefault("options", {})["num_ctx"] = nctx
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"

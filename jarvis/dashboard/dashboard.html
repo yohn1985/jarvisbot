@@ -1362,8 +1362,15 @@ function capsBadges(mi){ const caps=(mi&&mi.capabilities)||[]; const show=['tool
 function reasonControls(role,pool,model,rp,mi){ rp=rp||{}; const controls=(mi&&mi.controls)||{}; let h='';
   h+=controlSelect('cf-effort-'+role,'effort',controls.effort,'effort',rp);
   h+=controlSelect('cf-think-'+role,'thinking',controls.thinking,'thinking',rp);
-  const win=(mi&&mi.context_window)||0;
-  if(win) h+=`<span class="ctxbadge" title="context window">${ctxLabel(win)} ctx</span>`;
+  // context size: a picker when the model is context-selectable (ollama num_ctx, or Sonnet 200K/1M on
+  // an API-key backend); otherwise a read-only badge of the fixed window.
+  const opts=(mi&&mi.context_options)||[]; const curCtx=(rp.context|| (mi&&mi.context) || (mi&&mi.context_window) || 0);
+  if(opts.length>1){
+    h+=`<span class="rctl"><label>ctx</label><select id="cf-ctx-${role}">`+
+       opts.map(o=>`<option value="${o}"${(+o)===(+curCtx)?' selected':''}>${ctxLabel(o)}</option>`).join('')+`</select></span>`;
+  } else if(curCtx){
+    h+=`<span class="ctxbadge" title="context window">${ctxLabel(curCtx)} ctx</span>`;
+  }
   h+=capsBadges(mi);
   return h; }
 async function refreshReason(role){
@@ -1373,12 +1380,13 @@ async function refreshReason(role){
   const holder=document.getElementById('cf-reason-'+role);
   if(holder) holder.innerHTML='<span class="cfgmsg">detecting…</span>';
   let mi=null; try{ mi=await modelInfoFor(role,pool,model); }catch(err){}
-  if(holder) holder.innerHTML=reasonControls(role,pool,model,{effort:e&&e.value,thinking:t&&t.value},mi);
+  const ctx=document.getElementById('cf-ctx-'+role);
+  if(holder) holder.innerHTML=reasonControls(role,pool,model,{effort:e&&e.value,thinking:t&&t.value,context:ctx&&ctx.value},mi);
 }
 function saveRouting(){ const r={}, params={};
   document.querySelectorAll('[id^="cf-pool-"]').forEach(e=>{ const role=e.id.slice(8); const m=document.getElementById('cf-model-'+role); const model=m?m.value.trim():''; if(model) r[role]=e.value+':'+model;
-    const eff=document.getElementById('cf-effort-'+role), th=document.getElementById('cf-think-'+role); const p={};
-    if(eff) p.effort=eff.value; if(th) p.thinking=th.value; if(Object.keys(p).length) params[role]=p; });
+    const eff=document.getElementById('cf-effort-'+role), th=document.getElementById('cf-think-'+role), cx=document.getElementById('cf-ctx-'+role); const p={};
+    if(eff) p.effort=eff.value; if(th) p.thinking=th.value; if(cx) p.context=parseInt(cx.value)||0; if(Object.keys(p).length) params[role]=p; });
   saveCfg({routing:r,params:params},'msg-saveRouting'); }
 function savePriorities(){ saveCfg({priorities:(_v('cf-pri')||'').split('\n')},'msg-savePriorities'); }
 function saveSystemPrompt(){ saveCfg({prompts:{system:_v('cf-system-prompt')||''}},'msg-saveSystemPrompt'); }

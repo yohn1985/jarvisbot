@@ -286,8 +286,18 @@ def _model_info(role="orchestrator", route: str | None = None,
     params = (llm.get("params") or {}).get(role) or {}
     controls = _model_controls(pool, spec, model, info, params)
     effective, unsupported = _effective_reasoning_params(params, controls)
+    from jarvis.adapters import llm as _llm
+    kind = _llm.backend_kind(pool, spec)
+    ctx_options = _llm.context_options(kind, info["context_window"], model)   # selectable context sizes
+    try:
+        chosen_ctx = int(params.get("context") or 0)
+    except (TypeError, ValueError):
+        chosen_ctx = 0
+    if chosen_ctx not in ctx_options:                                        # default to the model's max
+        chosen_ctx = ctx_options[-1] if ctx_options else info["context_window"]
     return {"role": role, "route": route, "pool": pool, "model": model or route,
             "context_window": info["context_window"], "capabilities": info["capabilities"],
+            "context_options": ctx_options, "context": chosen_ctx,
             "controls": controls, "effective_params": effective, "unsupported_params": unsupported,
             "effort": controls["effort"]["value"] if controls["effort"]["supported"] else None,
             "thinking": controls["thinking"]["value"] if controls["thinking"]["supported"] else None}
@@ -335,6 +345,18 @@ def _sanitize_llm_params(data: dict) -> list[str]:
                 clean[key] = val
             else:
                 changed.append(f"params.{role}.{key}")
+        # context size: keep only if it's a real, selectable option for this model AND not just the
+        # default max (no need to persist the default). >1 option means the model is context-selectable.
+        ctx_val = slot.get("context")
+        ctx_opts = info.get("context_options") or []
+        try:
+            ctx_int = int(ctx_val) if ctx_val not in (None, "", "default") else 0
+        except (TypeError, ValueError):
+            ctx_int = 0
+        if ctx_int and len(ctx_opts) > 1 and ctx_int in ctx_opts and ctx_int != ctx_opts[-1]:
+            clean["context"] = ctx_int
+        elif ctx_val not in (None, "", "default"):
+            changed.append(f"params.{role}.context")
         if clean:
             if clean != slot:
                 params[role] = clean
@@ -393,6 +415,16 @@ def _save_config(patch):
                     slot[k] = v
                 else:
                     raise ValueError(f"{role}.{k} must be one of {sorted(allowed)} / default, got '{v}'")
+            # context size (ollama num_ctx etc.): a positive int, or unset/default; exact validity vs the
+            # model's options is enforced by _sanitize_llm_params().
+            cv = rparams.get("context")
+            if cv in (None, "", "default", 0, "0"):
+                slot.pop("context", None)
+            else:
+                try:
+                    slot["context"] = int(cv)
+                except (TypeError, ValueError):
+                    raise ValueError(f"{role}.context must be an integer, got '{cv}'")
             if not slot:
                 pr.pop(role, None)
         if not pr:
