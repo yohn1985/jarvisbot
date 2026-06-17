@@ -72,6 +72,17 @@ workers:
   deep_fix: {cmd: ["echo","[deep-fix] would investigate {target}"], action_class: propose}
   fixer:    {cmd: ["echo","[fixer] would open a PR for {target}"], action_class: fix_pr}
 
+# MCP (Model Context Protocol) servers — provider-agnostic. Jarvis is the MCP client: it spawns
+# each server, lists its tools, and exposes them to ANY brain backend (claude/codex/ollama/...) the
+# same way as its built-in tools. Add servers here or from the dashboard's MCP settings tab.
+# Each: {name, command, args, env, enabled}. stdio transport (v1).
+mcp:
+  servers: []
+  # - name: filesystem
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/expose"]
+  #   enabled: true
+
 # Wake triggers
 wake:
   heartbeat_seconds: 1800    # floor so it never sleeps forever

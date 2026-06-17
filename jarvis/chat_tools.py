@@ -490,8 +490,11 @@ def parse_model_tool_call(text: str) -> dict | None:
         if cmds:
             return {"tool": "shell", "args": {"cmd": cmds[0]}}
         return None
-    tool = (data.get("tool") or "").strip().lower()
+    tool_raw = (data.get("tool") or "").strip()
     args = data.get("args") or {}
+    if tool_raw.startswith("mcp__") and isinstance(args, dict):    # MCP tool — preserve case, route later
+        return {"tool": tool_raw, "args": args}
+    tool = tool_raw.lower()
     if tool not in {"shell", "read", "search", "write", "append", "edit", "show_image", "add_skill"} or not isinstance(args, dict):
         cmds = extract_shell_commands(text, limit=1)
         if cmds:
@@ -593,10 +596,12 @@ def normalize_tool_call(name: str, args: dict | None = None) -> dict | None:
 
 
 def _tool_call_from_parts(tool_name: str, attrs: dict | None = None, child_args: dict | None = None) -> dict | None:
-    tag_l = (tool_name or "").strip().lower()
     attrs = attrs or {}
     child_args = child_args or {}
     args = {**attrs, **child_args}
+    if str(tool_name or "").startswith("mcp__"):       # MCP tool — pass through verbatim (case matters)
+        return {"tool": str(tool_name), "args": args}
+    tag_l = (tool_name or "").strip().lower()
     # Liberal aliasing — models invent tool names (read_file, run_command, execute, terminal, ...).
     # Map them to our canonical tools instead of dropping the call (text-recovery fallback path).
     if tag_l in {"read_file", "read", "cat", "open", "view_file", "view", "get_file"}:
@@ -705,9 +710,32 @@ def extract_shell_commands(text: str, limit: int = 8) -> list[str]:
     return out
 
 
+def all_tool_specs(cfg: dict | None = None) -> list:
+    """Static Jarvis tools + any MCP server tools (provider-agnostic). cfg is loaded lazily if
+    omitted. Used at the chat/heavy call-sites so every backend sees MCP tools the same way."""
+    specs = list(TOOL_SPECS)
+    try:
+        from jarvis import mcp
+        if cfg is None:
+            from jarvis.config import load
+            cfg = load()
+        specs += mcp.tool_specs(cfg)
+    except Exception:
+        pass
+    return specs
+
+
 def run_model_tool(call: dict, owner_text: str) -> dict:
     tool = (call or {}).get("tool")
     args = (call or {}).get("args") or {}
+    if isinstance(tool, str) and tool.startswith("mcp__"):
+        try:
+            from jarvis import mcp
+            res = mcp.call(tool, args)
+        except Exception as e:
+            res = {"ok": False, "error": str(e)[:200]}
+        res["tool"] = "mcp"; res["name"] = tool
+        return res
     if tool == "shell":
         return run_shell(str(args.get("cmd") or ""))
     if tool == "read":
@@ -846,6 +874,10 @@ def format_result(result: dict) -> str:
         if result.get("ok"):
             return f"Saved skill '{result.get('name')}' ({result.get('path')}). It will be auto-detected from now on."
         return f"(could not add skill: {result.get('error')})"
+    if tool == "mcp":
+        if result.get("ok"):
+            return f"{result.get('name')}:\n{result.get('text') or '(no output)'}"
+        return f"({result.get('name')} failed: {result.get('error') or result.get('text')})"
     if tool == "codex":
         if result.get("ok"):
             return result.get("output") or "(no output)"

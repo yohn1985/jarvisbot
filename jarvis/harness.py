@@ -122,6 +122,11 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
         skills_catalog = _skills_mod.catalog()
     except Exception:
         skills_catalog = ""
+    try:                                          # MCP tools (provider-agnostic) so the model sees them
+        from jarvis import mcp as _mcp_mod
+        mcp_catalog = _mcp_mod.catalog(cfg)
+    except Exception:
+        mcp_catalog = ""
     transcript = "\n".join(
         _transcript_turn(m)
         for m in messages
@@ -138,6 +143,11 @@ def build_context(cfg: dict, messages: list[dict], latest: str, env_context: str
             "with your normal tools (e.g. run a referenced script via shell, then show_image its output):\n"
             + skills_catalog + "\n"
             if skills_catalog else ""
+        )
+        + (
+            "\n\nMCP tools available (call them like any other tool, by their exact name):\n"
+            + mcp_catalog + "\n"
+            if mcp_catalog else ""
         )
         + (
             "\n\nThe owner gave you documentation path(s) that were durably remembered: "
@@ -985,7 +995,7 @@ def run_heavy_task(llm, cfg: dict, owner_text: str, profile: dict,
         + "\nAnswer the task based on the evidence above. Be concise and outcome-focused."
         + "\n\nTask:\n" + owner_text
     )
-    turn_result = llm.turn("orchestrator", act_prompt, tools=chat_tools.TOOL_SPECS, timeout=180)
+    turn_result = llm.turn("orchestrator", act_prompt, tools=chat_tools.all_tool_specs(cfg), timeout=180)
     answer_text = turn_result.get("text", "")
 
     # Execute any native tool calls the model used, then re-generate with the extra evidence

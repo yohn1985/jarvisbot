@@ -519,6 +519,48 @@ def _install_skill(name):
     return {"started": True}
 
 
+def _mcp_status():
+    """Configured MCP servers with live connection status + discovered tools (for the MCP tab)."""
+    try:
+        from jarvis.config import load
+        from jarvis import mcp
+        cfg = load()
+        servers = ((cfg.get("mcp") or {}).get("servers")) or []
+        return {"servers": mcp.probe(cfg), "raw": servers}
+    except Exception as e:
+        return {"servers": [], "error": str(e)[:200]}
+
+
+def _save_mcp(servers):
+    """Persist the MCP server list to config.yaml (atomic) and reset clients so it takes effect."""
+    import yaml
+    if not isinstance(servers, list):
+        return {"ok": False, "error": "servers must be a list"}
+    clean = []
+    for s in servers:
+        if not isinstance(s, dict) or not str(s.get("name") or "").strip() or not str(s.get("command") or "").strip():
+            continue
+        args = s.get("args")
+        if isinstance(args, str):
+            args = [a for a in args.split() if a]      # accept a plain string from the UI
+        clean.append({
+            "name": str(s["name"]).strip(),
+            "command": str(s["command"]).strip(),
+            "args": [str(a) for a in (args or [])],
+            "enabled": bool(s.get("enabled", True)),
+        })
+    p = ROOT / "config.yaml"
+    data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
+    data.setdefault("mcp", {})["servers"] = clean
+    _write_yaml(p, data)
+    try:
+        from jarvis import mcp
+        mcp.shutdown()                                  # drop cached clients so new config reconnects
+    except Exception:
+        pass
+    return {"ok": True, "count": len(clean)}
+
+
 def _discovery():
     """What Jarvis has written about its world. Each doc is tagged `primary` so the sidebar can show
     only the important ones (INDEX + per-host discovery docs); the many answered-question notes stay
@@ -1023,7 +1065,7 @@ def _chat_reply(conv):
             try:
                 full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
                                       should_cancel=lambda: st.cancelled, images=img_paths or None,
-                                      tools=chat_tools.TOOL_SPECS).strip()
+                                      tools=chat_tools.all_tool_specs(cfg)).strip()
             except Exception:
                 try:
                     full = llm.run("orchestrator", prompt, timeout=200).strip()
@@ -1415,6 +1457,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_discovery()))
         if u.path == "/api/training-status":
             return self._send(200, json.dumps(_training_status()))
+        if u.path == "/api/mcp":
+            return self._send(200, json.dumps(_mcp_status()))
         if u.path == "/api/skills":
             return self._send(200, json.dumps(_skills()))
         if u.path == "/api/models":
@@ -1461,6 +1505,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200 if res.get("ok") else 400, json.dumps(res))
             except Exception as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}))
+        if u.path == "/api/mcp/save":
+            return self._send(200, json.dumps(_save_mcp(body.get("servers"))))
         if u.path == "/api/reindex":
             try:
                 from jarvis.config import load

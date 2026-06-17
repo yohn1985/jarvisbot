@@ -265,6 +265,7 @@
       <button type="button" id="stab-models"   onclick="showSet('models')">BRAIN &amp; MODELS</button>
       <button type="button" id="stab-behavior" onclick="showSet('behavior')">BEHAVIOR</button>
       <button type="button" id="stab-skills"   onclick="showSet('skills')">SKILLS</button>
+      <button type="button" id="stab-mcp"      onclick="showSet('mcp')">MCP</button>
     </nav>
     <div class="page">
       <div id="setpane-general" class="setpane">
@@ -295,6 +296,11 @@
         <div class="setdesc">Shipped capabilities — install their dependencies with one click.</div>
         <div id="set-skills"></div>
       </div>
+      <div id="setpane-mcp" class="setpane" hidden>
+        <h2 class="seth">MCP servers</h2>
+        <div class="setdesc">Model Context Protocol servers (provider-agnostic). Jarvis spawns each one and exposes its tools to whatever brain is selected. stdio transport.</div>
+        <div id="set-mcp"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -307,9 +313,10 @@ function show(id){
 // Settings sub-tabs: toggle pane visibility only (never re-render — so it can't wipe typing and
 // stays independent of _cfgSig). All panes remain in the DOM; load() keeps repopulating them.
 function showSet(id){
-  for(const s of ['general','models','behavior','skills']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
+  for(const s of ['general','models','behavior','skills','mcp']){ const el=document.getElementById('setpane-'+s); if(el) el.hidden=(s!==id); }
   for(const b of document.querySelectorAll('#set-subnav button')) b.classList.remove('active');
   const t=document.getElementById('stab-'+id); if(t) t.classList.add('active');
+  if(id==='mcp') loadMcp();   // probe servers lazily (spawns them) only when the tab is opened
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function statusClass(s){ return ({Running:'run',running:'run',ok:'ok',would:'would',failed:'failed'})[s]||'ok'; }
@@ -477,6 +484,53 @@ async function saveSkill(){
 async function installSkill(name){
   await fetch('/api/skill-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
   _skSig=''; _fastUntil=Date.now()+60000; load();   // poll while it installs so success/error shows
+}
+// ---- MCP servers (provider-agnostic). Probed lazily when the MCP tab opens (it spawns servers). ----
+let _mcpData={raw:[],servers:[]};
+async function loadMcp(){
+  const el=document.getElementById('set-mcp'); if(!el) return;
+  el.innerHTML='<div class="empty">Connecting to MCP servers…</div>';
+  try{ const r=await fetch('/api/mcp'); _mcpData=await r.json(); }catch(e){ _mcpData={raw:[],servers:[],error:String(e)}; }
+  renderMcp();
+}
+function _mcpStatusFor(name){ return (_mcpData.servers||[]).find(s=>s.name===name)||null; }
+function mcpRowHTML(s){
+  s=s||{}; const st=_mcpStatusFor(s.name); let status='';
+  if(st){ status=st.connected
+      ? '<span class="skok">✓ connected — '+(st.tools||[]).length+' tool(s): '+esc((st.tools||[]).join(', '))+'</span>'
+      : '<span class="skerr">✕ '+esc(st.error||'not connected')+'</span>'; }
+  return '<div class="card mcp-row">'+
+    '<input class="mcp-name" placeholder="name (e.g. filesystem)" value="'+esc(s.name||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-cmd" placeholder="command (e.g. npx)" value="'+esc(s.command||'')+'" style="width:100%;box-sizing:border-box;margin-bottom:6px"/>'+
+    '<input class="mcp-args" placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)" value="'+esc((s.args||[]).join(' '))+'" style="width:100%;box-sizing:border-box;margin-bottom:6px;font-family:monospace"/>'+
+    '<label style="display:inline-block;margin-right:12px"><input type="checkbox" class="mcp-enabled" '+(s.enabled===false?'':'checked')+'/> enabled</label>'+
+    '<button type="button" class="bigbtn" onclick="this.closest(\'.mcp-row\').remove()">Remove</button>'+
+    (status?'<div style="margin-top:6px">'+status+'</div>':'')+'</div>';
+}
+function renderMcp(){
+  const el=document.getElementById('set-mcp'); if(!el) return;
+  let h='<div id="mcp-rows">';
+  for(const s of (_mcpData.raw||[])) h+=mcpRowHTML(s);
+  h+='</div><div style="margin-top:10px"><button type="button" class="bigbtn" onclick="mcpAddRow()">+ Add server</button> '+
+     '<button type="button" class="bigbtn" onclick="saveMcp()">Save &amp; reconnect</button></div>'+
+     '<div id="mcp-msg" style="margin-top:8px"></div>';
+  el.innerHTML=h;
+}
+function mcpAddRow(){ const c=document.getElementById('mcp-rows'); if(c) c.insertAdjacentHTML('beforeend', mcpRowHTML({enabled:true})); }
+async function saveMcp(){
+  const rows=[...document.querySelectorAll('#mcp-rows .mcp-row')].map(r=>({
+    name:r.querySelector('.mcp-name').value.trim(),
+    command:r.querySelector('.mcp-cmd').value.trim(),
+    args:r.querySelector('.mcp-args').value.trim(),
+    enabled:r.querySelector('.mcp-enabled').checked,
+  })).filter(s=>s.name&&s.command);
+  const msg=document.getElementById('mcp-msg'); if(msg){msg.textContent='Saving & reconnecting…'; msg.style.color='var(--dim)';}
+  try{
+    const r=await fetch('/api/mcp/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({servers:rows})});
+    const j=await r.json();
+    if(j.ok){ if(msg){msg.textContent='✓ saved '+j.count+' server(s) — reconnecting…'; msg.style.color='var(--grntxt)';} setTimeout(loadMcp,500); }
+    else if(msg){ msg.textContent='✕ '+(j.error||'failed'); msg.style.color='#e88'; }
+  }catch(e){ if(msg){msg.textContent='✕ '+e; msg.style.color='#e88';} }
 }
 let _cbId=0;
 function codeBlockHTML(b){ const id='cb'+(_cbId++);
