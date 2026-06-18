@@ -1,6 +1,9 @@
 """Reasoning + context resolver in jarvis.adapters.llm — the single source of truth for which control
 each backend exposes and what gets applied. Pure functions, no network."""
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from jarvis.adapters import llm
 
@@ -58,6 +61,16 @@ class ReasoningValueTests(unittest.TestCase):
         self.assertEqual(llm.reasoning_value("claude_cli", {}), "")
 
 
+class ReasoningDeltaTests(unittest.TestCase):
+    def test_openai_compatible_reasoning_fields_are_real_thought(self):
+        for key in ("reasoning_content", "reasoning", "thinking", "thinking_content"):
+            with self.subTest(key=key):
+                self.assertEqual(llm.reasoning_delta_text({key: "model thought"}), "model thought")
+
+    def test_non_reasoning_delta_is_not_thought(self):
+        self.assertEqual(llm.reasoning_delta_text({"content": "answer text"}), "")
+
+
 class ContextOptionTests(unittest.TestCase):
     def test_claude_sonnet_opus_fable_get_1m(self):
         for m in ("claude-sonnet-4-6", "claude-opus-4-8", "claude-fable-5"):
@@ -99,6 +112,33 @@ class OneMFlagTests(unittest.TestCase):
         self.assertTrue(llm.one_m_unavailable())
         llm.clear_1m_unavailable()
         self.assertFalse(llm.one_m_unavailable())
+
+
+class CodexInvokeTests(unittest.TestCase):
+    def test_codex_invocation_uses_canonical_noninteractive_flags(self):
+        router = llm.RoutingLLM(
+            routing={},
+            backends={"codex": ["codex", "exec", "--model", "{model}", "{prompt}"]},
+            aliases={},
+            fallbacks=[],
+        )
+
+        def fake_run(cmd, input=None, capture_output=False, text=False, timeout=None):
+            self.assertEqual(cmd[:4], ["codex", "exec", "--model", "gpt-5.5"])
+            self.assertIn("--cd", cmd)
+            self.assertIn("--sandbox", cmd)
+            self.assertIn("danger-full-access", cmd)
+            self.assertIn('approval_policy="never"', cmd)
+            self.assertIn("--skip-git-repo-check", cmd)
+            self.assertIn("--output-last-message", cmd)
+            self.assertNotIn("Reply exactly OK", cmd)
+            self.assertEqual(input, "Reply exactly OK")
+            final = Path(cmd[cmd.index("--output-last-message") + 1])
+            final.write_text("OK")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch("jarvis.adapters.llm.subprocess.run", side_effect=fake_run):
+            self.assertEqual(router._invoke("codex", "gpt-5.5", "Reply exactly OK", 30), "OK")
 
 
 if __name__ == "__main__":

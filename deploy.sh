@@ -63,6 +63,10 @@ run rsync -a --delete "$ROOT/skills/" "$LIVE_DIR/skills/"
 for file in install.sh requirements.txt README.md LICENSE .env.example config.example.yaml docker-compose.yml; do
   [ -f "$ROOT/$file" ] && run install -m 0644 "$ROOT/$file" "$LIVE_DIR/$file"
 done
+if [ -f "$ROOT/extras/config.yaml" ]; then
+  run install -d -m 0750 "$LIVE_DIR/extras"
+  run install -m 0600 "$ROOT/extras/config.yaml" "$LIVE_DIR/extras/config.yaml"
+fi
 run chmod +x "$LIVE_DIR/install.sh"
 
 for unit in "${SERVICES[@]}"; do

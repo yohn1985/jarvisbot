@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import time
 import uuid as _uuid
 from pathlib import Path
@@ -38,7 +39,15 @@ _LIVE_STATE_WORDS = (
     "status", "current", "currently", "right now", "today", "latest", "recent",
     "running", "health", "stuck", "broken", "fixed", "deployed", "not deployed",
     "queue", "logs", "timer", "service", "pipeline", "worker", "host", "network",
-    "storage", "uptime", "price", "version", "release",
+    "storage", "uptime", "price", "version", "release", "ticket", "tickets",
+    "issue", "issues", "gitea", "open count", "how many", "count",
+)
+_CORRECTION_WORDS = (
+    "your answer is wrong", "your answer was wrong", "answer is wrong",
+    "answer was wrong", "not correct", "incorrect", "not complete",
+    "incomplete", "buggy", "doesnt look correct", "doesn't look correct",
+    "doesnt look complete", "doesn't look complete", "you missed",
+    "you were wrong", "that was wrong", "that's wrong",
 )
 _HIGH_RISK_WORDS = (
     "secret", "password", "token", "key", "customer", "production", "prod",
@@ -201,6 +210,9 @@ def select_execution_profile(latest: str, local_docs: str = "", trigger: str = "
     if _contains_any(low, _HIGH_RISK_WORDS):
         reasons.append("high-risk domain")
         required_checks.append("source/live evidence")
+    if _contains_any(low, _CORRECTION_WORDS):
+        reasons.append("owner correction requires rechecking")
+        required_checks.append("live evidence")
     memory_flags = _memory_trust_flags(local_docs)
     if memory_flags:
         reasons.extend(memory_flags)
@@ -490,22 +502,46 @@ def _first_memory_hint(local_docs: str) -> dict | None:
     return meta
 
 
-def collect_tool_evidence(llm, base: str, latest: str, status=None, force: bool = False) -> str:
+def collect_tool_evidence(llm, base: str, latest: str, status=None, force: bool = False, trace=None) -> str:
     """Let the selected model request Jarvis-owned tools until it has enough evidence."""
     if not force and not likely_needs_tools(latest):
+        if trace:
+            trace.event("tool_evidence_skipped", reason="no tool hints")
         return ""
     evidence = []
     planned_calls = planned_tool_calls(latest)
+    if trace:
+        trace.event("planned_tools", count=len(planned_calls), calls=planned_calls)
+    planned_results = []
     for call in planned_calls:
         if status:
             try:
                 status(tool_status(call))
             except Exception:
                 pass
-        result = chat_tools.run_model_tool(call, latest)
+        t0 = time.monotonic()
+        try:
+            result = chat_tools.run_model_tool(call, latest)
+        finally:
+            if trace:
+                trace.event("tool_call_end", source="planned", tool=call.get("tool"),
+                            args=call.get("args") or {},
+                            duration_ms=int((time.monotonic() - t0) * 1000))
+        planned_results.append(result)
         evidence.append(chat_tools.format_result(result))
+    if planned_calls and planned_calls_are_sufficient(latest, planned_calls):
+        if trace:
+            trace.event(
+                "tool_loop_done",
+                reason="planned tools sufficient",
+                planned_ok=all(r.get("ok") for r in planned_results),
+            )
+        return "\n\n".join(evidence)
     if any(call.get("tool") in ("write", "append", "edit") for call in planned_calls):
         return "\n\n".join(evidence)
+    seen_calls: set[str] = set()
+    failed_calls: set[str] = set()
+    consecutive_failures = 0
     for _ in range(chat_tools.MAX_TOOL_STEPS):
         prompt = (
             base
@@ -517,22 +553,88 @@ def collect_tool_evidence(llm, base: str, latest: str, status=None, force: bool 
             + "\n\nIf a tool is needed, return exactly one JSON tool request. If enough evidence is available, return exactly NO_TOOL."
         )
         try:
+            t0 = time.monotonic()
+            if status:
+                try:
+                    status("deciding whether another tool is needed")
+                except Exception:
+                    pass
+            if trace:
+                trace.event("tool_decision_start", evidence_chars=len("\n\n".join(evidence)))
             decision = llm.run("orchestrator", prompt, timeout=120).strip()
+            if trace:
+                trace.event("tool_decision_end", duration_ms=int((time.monotonic() - t0) * 1000),
+                            decision_preview=decision[:240])
         except Exception:
+            if trace:
+                trace.event("tool_decision_error")
             break
         call = chat_tools.parse_model_tool_call(decision)
         if not call:
+            if trace:
+                trace.event("tool_loop_done", reason="no tool call")
+            break
+        call_key = json.dumps(call, sort_keys=True)
+        if call_key in seen_calls:
+            if trace:
+                trace.event("tool_loop_done", reason="duplicate tool call", call=call)
+            if status:
+                try:
+                    status("stopping repeated tool loop")
+                except Exception:
+                    pass
             break
         if status:
             try:
                 status(tool_status(call))
             except Exception:
                 pass
-        result = chat_tools.run_model_tool(call, latest)
+        seen_calls.add(call_key)
+        t0 = time.monotonic()
+        try:
+            result = chat_tools.run_model_tool(call, latest)
+        finally:
+            if trace:
+                trace.event("tool_call_end", source="model", tool=call.get("tool"),
+                            args=call.get("args") or {},
+                            duration_ms=int((time.monotonic() - t0) * 1000))
         evidence.append(chat_tools.format_result(result))
+        if not result.get("ok"):
+            consecutive_failures += 1
+            if call_key in failed_calls:
+                if trace:
+                    trace.event("tool_loop_done", reason="repeated failed tool call", call=call)
+                break
+            if consecutive_failures >= 2:
+                if trace:
+                    trace.event("tool_loop_done", reason="consecutive failed tool calls", failures=consecutive_failures)
+                if status:
+                    try:
+                        status("stopping after repeated failed tool checks")
+                    except Exception:
+                        pass
+                break
+            failed_calls.add(call_key)
+        else:
+            consecutive_failures = 0
         if call.get("tool") in ("write", "append", "edit"):
             break
     return "\n\n".join(evidence)
+
+
+def planned_calls_are_sufficient(latest: str, calls: list[dict]) -> bool:
+    """Deterministic probes that already answer the owner's evidence need.
+
+    Ticket/Gitea and direct image turns were added specifically to avoid slow or model-invented tool
+    loops. Once these first-pass probes run, the answer loop should summarize their evidence instead
+    of asking the model whether to run more shell commands.
+    """
+    low = (latest or "").lower()
+    if any(w in low for w in ("ticket", "tickets", "gitea", "open issue", "open issues")):
+        return True
+    if _first_image_url(latest):
+        return True
+    return False
 
 
 def planned_tool_calls(latest: str) -> list[dict]:
@@ -545,6 +647,14 @@ def planned_tool_calls(latest: str) -> list[dict]:
     if edit_plan:
         return edit_plan
     low = (latest or "").lower()
+    screenshot = _first_image_url(latest)
+    if screenshot:
+        return [{"tool": "show_image", "args": {"path": screenshot}}]
+    if any(w in low for w in ("ticket", "tickets", "gitea", "open issue", "open issues")):
+        issue_number = _explicit_issue_number(latest)
+        if issue_number:
+            return [{"tool": "shell", "args": {"cmd": _gitea_tool_cmd(f"issue {issue_number}")}}]
+        return [{"tool": "shell", "args": {"cmd": _gitea_tool_cmd("open-summary 30")}}]
     if not any(w in low for w in ("status", "doing", "stuck", "running", "health", "pipeline", "worker", "service", "timer")):
         return []
     calls: list[dict] = [
@@ -588,6 +698,31 @@ def _strip_token(value: str) -> str:
     return re.sub(r"\s*(?:,?\s*then\s+.*)?$", "", value, flags=re.I).strip().strip("`'\"")
 
 
+def _explicit_issue_number(text: str) -> int | None:
+    raw = text or ""
+    patterns = (
+        r"\b(?:ticket|issue)\s*(?:number\s*)?#?\s*(\d{1,7})\b",
+        r"#(\d{1,7})\b",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, raw, re.I)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _first_image_url(text: str) -> str:
+    m = re.search(r"https?://[^\s<>'\"]+\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>'\"]*)?", text or "", re.I)
+    return m.group(0) if m else ""
+
+
+def _gitea_tool_cmd(args: str) -> str:
+    return f"PYTHONPATH={shlex.quote(str(_JARVIS_ROOT))} python3 -m jarvis.gitea_tools {args}"
+
+
 def tool_status(call: dict) -> str:
     """Human-visible progress text for the live worklog."""
     tool = (call or {}).get("tool") or "tool"
@@ -612,7 +747,7 @@ def tool_status(call: dict) -> str:
     return f"running {tool} tool"
 
 
-def run_tool_calls(calls: list[dict], owner_text: str, status=None, limit: int = 8) -> str:
+def run_tool_calls(calls: list[dict], owner_text: str, status=None, limit: int = 8, trace=None) -> str:
     """Execute already-parsed tool calls (e.g. NATIVE structured tool_calls from the model) and
     return formatted evidence. Shell stays safety-gated; write/edit stay owner-gated in run_model_tool."""
     evidence = []
@@ -622,11 +757,19 @@ def run_tool_calls(calls: list[dict], owner_text: str, status=None, limit: int =
                 status(tool_status(call))
             except Exception:
                 pass
-        evidence.append(chat_tools.format_result(chat_tools.run_model_tool(call, owner_text)))
+        t0 = time.monotonic()
+        try:
+            result = chat_tools.run_model_tool(call, owner_text)
+        finally:
+            if trace:
+                trace.event("tool_call_end", source="native_stream", tool=call.get("tool"),
+                            args=call.get("args") or {},
+                            duration_ms=int((time.monotonic() - t0) * 1000))
+        evidence.append(chat_tools.format_result(result))
     return "\n\n".join(evidence)
 
 
-def execute_recovered_tool_calls(text: str, owner_text: str, status=None, limit: int = 8) -> str:
+def execute_recovered_tool_calls(text: str, owner_text: str, status=None, limit: int = 8, trace=None) -> str:
     """Execute safe model-emitted tool calls recovered from text/thinking."""
     # Recover ALL three formats models actually use: fenced shell, XML/pseudo-XML tags, AND
     # JSON tool requests ({"tool":...,"args":...}). DeepSeek/OpenAI-style models emit JSON in
@@ -645,14 +788,29 @@ def execute_recovered_tool_calls(text: str, owner_text: str, status=None, limit:
                 status(f"executing recovered shell command: {cmd[:90]}")
             except Exception:
                 pass
-        evidence.append(chat_tools.format_result(chat_tools.run_shell(cmd, timeout=20)))
+        t0 = time.monotonic()
+        try:
+            result = chat_tools.run_shell(cmd, timeout=20)
+        finally:
+            if trace:
+                trace.event("tool_call_end", source="recovered_shell", tool="shell",
+                            args={"cmd": cmd}, duration_ms=int((time.monotonic() - t0) * 1000))
+        evidence.append(chat_tools.format_result(result))
     for call in calls[: max(0, limit - len(commands))]:
         if status:
             try:
                 status(tool_status(call))
             except Exception:
                 pass
-        evidence.append(chat_tools.format_result(chat_tools.run_model_tool(call, owner_text)))
+        t0 = time.monotonic()
+        try:
+            result = chat_tools.run_model_tool(call, owner_text)
+        finally:
+            if trace:
+                trace.event("tool_call_end", source="recovered_tool", tool=call.get("tool"),
+                            args=call.get("args") or {},
+                            duration_ms=int((time.monotonic() - t0) * 1000))
+        evidence.append(chat_tools.format_result(result))
     return "\n\n".join(evidence)
 
 
@@ -674,6 +832,47 @@ def repair_unexecuted_command_plan(llm, latest: str, answer_text: str, thinking_
         return out or ev
     except Exception:
         return ev
+
+
+def force_final_answer(llm, latest: str, evidence: str, thinking_text: str = "") -> str:
+    """Recover from a model turn that produced reasoning/evidence but no final answer."""
+    evidence = (evidence or "").strip()
+    thinking_text = (thinking_text or "").strip()
+    if not evidence and not thinking_text:
+        return ""
+    prompt = (
+        "A previous assistant turn produced reasoning or tool evidence but no final answer.\n"
+        "Write the missing final answer now. Use only the evidence below. Do not call tools. "
+        "Do not describe your process. If the evidence is insufficient, state exactly what is missing.\n\n"
+        f"Owner message:\n{latest}\n\n"
+        f"Evidence:\n{evidence[-18000:]}\n\n"
+        f"Prior reasoning, if useful:\n{thinking_text[-3000:]}\n"
+    )
+    for role in ("orchestrator", "summarizer", "triage"):
+        try:
+            out = llm.run(role, prompt, timeout=120).strip()
+        except Exception:
+            continue
+        if out and out.lower() != "(no reply)":
+            return out
+    return ""
+
+
+def looks_like_raw_tool_output(text: str, owner_text: str = "") -> bool:
+    """Detect accidental command dumps where the owner asked for an answer, not raw output."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    owner = (owner_text or "").lower()
+    if any(s in owner for s in ("show me the output", "paste the output", "raw output", "command output")):
+        return False
+    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    if lines[0].lstrip().startswith("$ "):
+        return True
+    commandish = sum(1 for ln in lines[:6] if ln.lstrip().startswith(("$ ", "page ")))
+    return commandish >= 2
 
 
 def _json_object(text: str) -> dict | None:

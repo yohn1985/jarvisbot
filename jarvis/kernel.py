@@ -39,7 +39,7 @@ def decide(cfg, world) -> tuple[str, str]:
     for rung in cfg["priorities"]:
         if ladder.get(rung):
             return rung, _action_for(rung, ladder[rung])
-    return "p5_curiosity", "explore an unknown area"
+    return "idle", "idle: no eligible work"
 
 def _action_for(rung, payload):
     return {
@@ -201,30 +201,12 @@ def act(cfg, decision, world):
     records the INTENT. So this is always safe to call."""
     rung = decision["rung"]
     if rung == "p5_curiosity":          # autonomous discovery + documentation (read-only)
-        # When curiosity is heavy (live state / verified-memory needed) and the queue is
-        # clear, use the full GROUND→VERIFY→LEARN loop instead of the explore shortcut.
-        profile = {"mode": decision.get("cognitive_profile", "daily"),
-                   "reason": decision.get("cognitive_reason", ""),
-                   "required_checks": [], "reasons": []}
-        if profile["mode"] == "heavy" and not _open_question_count():
-            try:
-                from jarvis.adapters.llm import build_llm
-                from jarvis import harness
-                llm = build_llm(cfg)
-                if llm:
-                    result = harness.run_heavy_task(llm, cfg, decision["action"], profile)
-                    decision["worker"] = (
-                        f"curiosity (heavy): {result.get('text', '')[:80]}"
-                        + (" [verified]" if result.get("verified") else " [unverified]")
-                    )
-                    return
-            except Exception:
-                pass  # fall through to normal explore on any failure
         _explore(cfg, decision)
         return
     backlog = world.get("needs_human_backlog") or []
     plan = {
         "p3_needs_human_backlog":    ("deep_fix", backlog[0] if backlog else None),
+        "p4_self_maintenance":       ("deep_fix", world.get("self_maintenance")),
         "p2_self_caused_regression": ("deep_fix", world.get("self_caused_regression")),
         "p1_unfinished_wip":         ("fixer", world.get("unfinished_wip")),
     }.get(rung)
@@ -249,10 +231,17 @@ def think(cfg, decision, world):
         return
     if not (cfg.get("llm", {}) or {}).get("think_on_tick"):
         return
-    # Don't spend the expensive main brain reflecting on every routine learning tick — when Jarvis is
-    # just chewing its question queue, the answering IS the work. Reflect on Opus only when caught up
-    # (queue empty) or facing real work, where the judgment actually matters.
-    if decision.get("rung") == "p5_curiosity" and _open_question_count() > 0:
+    # Don't spend the expensive main brain on routine internal cycles. The bounded workers own these
+    # handoffs and record freshness/cooldowns; using the heavy harness here created repeated churn.
+    rung = decision.get("rung")
+    if rung == "idle":
+        decision["thought"] = "Idle: no eligible work after perception; waiting for the next wake or owner input."
+        return
+    if rung == "p4_self_maintenance":
+        decision["thought"] = "Self-maintenance: routing the recurring tooling/process item through the bounded worker path."
+        return
+    if rung == "p5_curiosity":
+        decision["thought"] = "Curiosity: using the bounded discovery/knowledge path instead of a long main-brain turn."
         return
     try:
         from jarvis.adapters.llm import build_llm

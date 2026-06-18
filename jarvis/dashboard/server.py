@@ -49,7 +49,7 @@ button{background:#3fae5a;color:#04140a;border:none;padding:8px 16px;border-radi
 .hint{color:#6f7e6b;font-size:12px;margin-top:16px;line-height:1.6}
 .hint code{background:#0c100c;border:1px solid #1d2a1d;border-radius:4px;padding:1px 6px;color:#7fe39a}
 .beta{background:#d8a13a;color:#1a1206;font-size:9px;font-weight:700;letter-spacing:1.5px;padding:2px 6px;border-radius:4px;margin-left:8px}</style></head>
-<body><div class=b><div style="color:#7fe39a;letter-spacing:2px;margin-bottom:14px">&#9679; JARVIS <span class=beta>EARLY BETA</span></div>
+<body><div class=b><div style="color:#7fe39a;letter-spacing:2px;margin-bottom:14px">&#9679; JARVIS <span class=beta>BETA</span></div>
 <div style="color:#6f7e6b;margin-bottom:12px">access token</div>
 <form onsubmit="location='/?token='+encodeURIComponent(document.getElementById('t').value);return false">
 <input id=t type=password autofocus placeholder="token"><button>enter</button></form>
@@ -520,6 +520,31 @@ def _messages(conv=None):
         return messaging.messages(conv)
     except Exception:
         return []
+
+
+def _chat_trace(message_id: str) -> dict:
+    try:
+        from jarvis import messaging
+        target = next((m for m in messaging.recent(1000) if m.get("id") == message_id), None)
+        if not target:
+            return {"ok": False, "error": "message not found"}
+        rel = target.get("trace_path") or ""
+        if not rel:
+            return {"ok": False, "error": "message has no trace"}
+        path = (ROOT / rel).resolve()
+        trace_root = (ROOT / "state" / "chat_traces").resolve()
+        if trace_root not in path.parents or not path.exists():
+            return {"ok": False, "error": "trace not found"}
+        events = []
+        for line in path.read_text().splitlines():
+            try:
+                events.append(json.loads(line))
+            except Exception:
+                pass
+        return {"ok": True, "message_id": message_id, "run_id": target.get("trace_id"),
+                "path": rel, "duration_ms": target.get("duration_ms"), "events": events[-300:]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
 def _conversations():
@@ -1007,6 +1032,9 @@ def _chat_reply(conv):
     """Generate Jarvis's reply to the latest owner message in a conversation, via the brain.
     Runs in a background thread so /api/say returns instantly; tokens push live over SSE and the
     message is also persisted so history/other clients see it."""
+    mid = None
+    trace = None
+    buf = {"t": "", "th": "", "ev": "", "last": 0.0}
     try:
         from jarvis.config import load
         from jarvis.adapters.llm import build_llm
@@ -1034,19 +1062,27 @@ def _chat_reply(conv):
         ident = cfg.get("identity") or {}
         name = ident.get("name", "Jarvis")
         from jarvis import chat_tools, harness
+        from jarvis.run_trace import ChatRunTrace, relative_trace_path
         mid = messaging.stream_start(conv)
-        buf = {"t": "", "th": "", "ev": "", "last": 0.0}
+        trace = ChatRunTrace(conv=conv, owner_preview=last)
+        trace.bind_message(mid)
+        trace_path = relative_trace_path(trace.path)
+        messaging.stream_update(mid, "", trace_id=trace.run_id, trace_path=trace_path,
+                                status="starting Jarvis run")
 
         def status_note(text):
             line = f"Harness: {text}\n"
             buf["ev"] += line
+            trace.event("status", text=text)
             st.emit("status", text)
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"],
+                                    status=text, trace_id=trace.run_id, trace_path=trace_path)
 
         env = _env_context()
         if harness.learn_owner_correction_now(last):
             status_note("learned explicit owner correction before answering")
         status_note("grounding in operating prompt and local context...")
+        trace.event("context_start")
         # Autocompaction: pull a fuller history and compact it against the model's REAL context
         # window so long conversations don't overflow the model or silently lose old context.
         ctx_msgs = messaging.messages(conv, limit=200)
@@ -1057,6 +1093,8 @@ def _chat_reply(conv):
         base = hctx["base"]
         local_docs = hctx.get("local_docs", "")
         profile = harness.select_execution_profile(last, local_docs, trigger="chat")
+        trace.event("profile_selected", profile=profile, context_window=window, compacted=bool(_compacted),
+                    local_docs_chars=len(local_docs))
         status_note(harness.profile_status(profile))
         srcs = hctx.get("context_sources") or []
         if srcs:
@@ -1066,11 +1104,16 @@ def _chat_reply(conv):
         compact_local = harness.compact_evidence(local_docs)
         if compact_local:
             buf["ev"] += "\nHarness: local evidence gathered for follow-up questions\n" + compact_local + "\n"
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"],
+                                    status="local context gathered", trace_id=trace.run_id,
+                                    trace_path=trace_path)
         fast = "" if profile.get("mode") == "heavy" else harness.fast_local_answer(last, local_docs)
         if fast:
             status_note("answered from local memory without full tool loop")
-            messaging.stream_end(mid, fast, thinking=buf["th"], evidence=buf["ev"])
+            trace.finish(status="fast_local", answer_chars=len(fast))
+            messaging.stream_end(mid, fast, thinking=buf["th"], evidence=buf["ev"],
+                                 duration_ms=trace.duration_ms(), trace_id=trace.run_id,
+                                 trace_path=trace_path)
             st.emit("text", fast)
             st.emit("done", fast)
             _stream_close(conv)
@@ -1086,33 +1129,41 @@ def _chat_reply(conv):
         if any(h in last.lower() for h in _hint):
             status_note("checking whether I need the web...")
             try:
-                decide = llm.run("triage", base +
-                    "\nDoes answering the latest owner message require CURRENT EXTERNAL web facts (software "
-                    "releases, prices, news, third-party docs) that are NOT in the environment info above and "
-                    "NOT about THIS machine? Reply EXACTLY 'SEARCH: <query>' if yes, otherwise 'NO'.",
-                    timeout=60).strip()
+                with trace.span("web_decision"):
+                    decide = llm.run("triage", base +
+                        "\nDoes answering the latest owner message require CURRENT EXTERNAL web facts (software "
+                        "releases, prices, news, third-party docs) that are NOT in the environment info above and "
+                        "NOT about THIS machine? Reply EXACTLY 'SEARCH: <query>' if yes, otherwise 'NO'.",
+                        timeout=60).strip()
             except Exception:
                 decide = "NO"
+            trace.event("web_decision", decision=decide[:240])
         if decide.upper().startswith("SEARCH:"):
             query = decide.split(":", 1)[1].strip()[:160]
             status_note(f"checking the web: {query}")
             try:
-                ans, results = _web_skill().research(query, llm)
+                with trace.span("web_research", query=query):
+                    ans, results = _web_skill().research(query, llm)
                 src = "\n".join("- " + r.get("url", "") for r in (results or [])[:3])
                 web_ctx, used_web = (ans + (f"\n\nSOURCES:\n{src}" if src else "")), True
             except Exception:
+                trace.event("web_research_error", query=query)
                 web_ctx = ""
-        tool_ctx = harness.collect_tool_evidence(
-            llm,
-            base + harness.profile_prompt(profile),
-            last,
-            status=status_note,
-            force=(profile.get("mode") == "heavy"),
-        )
+        with trace.span("tool_evidence", forced=profile.get("mode") == "heavy"):
+            tool_ctx = harness.collect_tool_evidence(
+                llm,
+                base + harness.profile_prompt(profile),
+                last,
+                status=status_note,
+                force=(profile.get("mode") == "heavy"),
+                trace=trace,
+            )
         if tool_ctx:
             stored_tool_ctx = harness.compact_tool_evidence_for_storage(tool_ctx)
             buf["ev"] += "\nHarness: tool evidence gathered for follow-up questions\n" + stored_tool_ctx + "\n"
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"],
+                                    status="tool evidence gathered", trace_id=trace.run_id,
+                                    trace_path=trace_path)
             status_note("summarizing from gathered evidence...")
         # 2) STREAM the answer on the main brain so it appears as it's written. If the model emits
         #    tool calls mid-answer, execute them, append the observed evidence, and ask again.
@@ -1153,20 +1204,27 @@ def _chat_reply(conv):
                 st.emit(kind, d)                          # per-token push to the browser (SSE)
                 now = time.time()
                 if now - buf["last"] > 0.5:               # persistence throttle (SSE is the live path)
-                    messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"]); buf["last"] = now
+                    messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"],
+                                            status="writing answer", trace_id=trace.run_id,
+                                            trace_path=trace_path); buf["last"] = now
 
             prompt = answer_prompt(live_tool_ctx)
             try:
-                full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
-                                      should_cancel=lambda: st.cancelled, images=img_paths or None,
-                                      tools=chat_tools.all_tool_specs(cfg)).strip()
+                with trace.span("llm_stream", step=step, prompt_chars=len(prompt),
+                                has_images=bool(img_paths), live_tool_ctx_chars=len(live_tool_ctx)):
+                    full = llm.run_stream("orchestrator", prompt, on_delta, timeout=200, think="medium",
+                                          should_cancel=lambda: st.cancelled, images=img_paths or None,
+                                          tools=chat_tools.all_tool_specs(cfg)).strip()
             except Exception:
+                trace.event("llm_stream_fallback", step=step)
                 try:
-                    full = llm.run("orchestrator", prompt, timeout=200).strip()
+                    with trace.span("llm_run_fallback", step=step):
+                        full = llm.run("orchestrator", prompt, timeout=200).strip()
                     attempt["t"] = full
                 except Exception as e2:
                     full = f"(couldn't reach my brain: {str(e2)[:120]})"
                     attempt["t"] = full
+                    trace.event("llm_run_fallback_error", step=step, error=str(e2)[:240])
             if st.cancelled:
                 full = (buf["t"].strip() + "  ⏹") if buf["t"].strip() else "⏹ stopped"
                 break
@@ -1187,16 +1245,19 @@ def _chat_reply(conv):
                     except Exception:
                         pass
                 if native_calls:
-                    recovered = harness.run_tool_calls(native_calls, last, status=status_note, limit=3)
+                    recovered = harness.run_tool_calls(native_calls, last, status=status_note, limit=3, trace=trace)
                 else:
-                    recovered = harness.execute_recovered_tool_calls(observed, last, status=status_note, limit=1)
+                    recovered = harness.execute_recovered_tool_calls(observed, last, status=status_note,
+                                                                     limit=1, trace=trace)
             if not recovered:
                 break
             live_tool_ctx = "\n\n".join(x for x in (live_tool_ctx, recovered) if x)
             buf["ev"] += "\nHarness: live tool evidence gathered\n" + harness.compact_tool_evidence_for_storage(recovered) + "\n"
             buf["t"] = ""
             full = ""
-            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"])
+            messaging.stream_update(mid, buf["t"], thinking=buf["th"], evidence=buf["ev"],
+                                    status="rerunning answer with tool evidence",
+                                    trace_id=trace.run_id, trace_path=trace_path)
             status_note("rerunning answer with executed tool evidence")
         repair = ""
         if not live_tool_ctx:
@@ -1207,6 +1268,13 @@ def _chat_reply(conv):
             full = repair
             buf["t"] = repair
         final_text = (full or buf["t"] or "").strip()
+        evidence_for_final = "\n\n".join(x for x in (web_ctx, tool_ctx, live_tool_ctx) if x)
+        if (not final_text or harness.looks_like_raw_tool_output(final_text, last)) and (evidence_for_final or buf["th"]):
+            status_note("recovering final answer from gathered evidence")
+            recovered_final = harness.force_final_answer(llm, last, "\n\n".join(x for x in (evidence_for_final, final_text) if x), buf["th"])
+            if recovered_final:
+                final_text = recovered_final
+                buf["t"] = recovered_final
         if not final_text and live_tool_ctx:
             final_text = live_tool_ctx
             buf["t"] = final_text
@@ -1219,14 +1287,16 @@ def _chat_reply(conv):
         if profile.get("mode") == "heavy":
             try:
                 status_note("verifying heavy-mode answer against gathered evidence")
-                verification = harness.verify_heavy_answer(
-                    llm,
-                    last,
-                    final_text,
-                    "\n\n".join(x for x in (web_ctx, tool_ctx, live_tool_ctx) if x),
-                    profile,
-                )
+                with trace.span("heavy_verification", answer_chars=len(final_text)):
+                    verification = harness.verify_heavy_answer(
+                        llm,
+                        last,
+                        final_text,
+                        "\n\n".join(x for x in (web_ctx, tool_ctx, live_tool_ctx) if x),
+                        profile,
+                    )
                 note = verification.get("note") or ("verified" if verification.get("verified") else "not verified")
+                trace.event("heavy_verification_result", verified=bool(verification.get("verified")), note=note)
                 status_note(f"heavy verification: {'passed' if verification.get('verified') else 'failed'} - {note}")
                 if not verification.get("verified"):
                     final_text = (
@@ -1255,7 +1325,11 @@ def _chat_reply(conv):
             status_note("reflection queued")
         except Exception:
             pass
-        messaging.stream_end(mid, final_text, thinking=buf["th"], evidence=buf["ev"])
+        trace.finish(status="ok", answer_chars=len(final_text), thinking_chars=len(buf["th"]),
+                     evidence_chars=len(buf["ev"]), profile_mode=profile.get("mode"))
+        messaging.stream_end(mid, final_text, thinking=buf["th"], evidence=buf["ev"],
+                             duration_ms=trace.duration_ms(), trace_id=trace.run_id,
+                             trace_path=trace_path)
         st.emit("done", final_text)
         _stream_close(conv)
         def _reflect_later():
@@ -1281,8 +1355,21 @@ def _chat_reply(conv):
         # normal done — otherwise the message stays streaming=True forever (frozen hanging cursor) and
         # the browser's EventSource hangs until its own timeout.
         try:
-            messaging.stream_end(mid, (buf.get("t") or "").strip() + "  ⏹ (interrupted)",
-                                 thinking=buf.get("th", ""), evidence=buf.get("ev", ""))
+            if trace:
+                trace.finish(status="error")
+        except Exception:
+            pass
+        try:
+            if mid:
+                messaging.stream_end(
+                    mid,
+                    (buf.get("t") or "").strip() + "  ⏹ (interrupted)",
+                    thinking=buf.get("th", ""),
+                    evidence=buf.get("ev", ""),
+                    duration_ms=(trace.duration_ms() if trace else None),
+                    trace_id=(trace.run_id if trace else None),
+                    trace_path=(relative_trace_path(trace.path) if trace else None),
+                )
         except Exception:
             pass
         try:
@@ -1600,6 +1687,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/messages":
             conv = (parse_qs(u.query).get("conv") or [None])[0]
             return self._send(200, json.dumps(_messages(conv)))
+        if u.path == "/api/chat-trace":
+            message_id = (parse_qs(u.query).get("id") or [""])[0]
+            return self._send(200, json.dumps(_chat_trace(message_id)))
         if u.path == "/api/chat-stream":              # Server-Sent Events: live token push for a reply
             return self._chat_stream(parse_qs(u.query).get("conv", ["general"])[0])
         if u.path == "/api/upload":                   # serve an attached image

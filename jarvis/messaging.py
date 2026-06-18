@@ -210,7 +210,8 @@ def stream_start(conv: str = "general") -> str:
     """Begin a streamed Jarvis reply: an empty message marked streaming. Returns its id."""
     mid = uuid.uuid4().hex[:8]
     _append({"id": mid, "ts": _now(), "from": "jarvis", "conv": conv,
-             "kind": "message", "text": "", "thinking": "", "evidence": "", "ref": "", "streaming": True})
+             "kind": "message", "text": "", "thinking": "", "evidence": "", "ref": "",
+             "streaming": True, "started_at": time.time()})
     return mid
 
 
@@ -235,8 +236,10 @@ def _mutate(fn) -> bool:
     return bool(changed)
 
 
-def stream_update(mid: str, text: str, thinking: str | None = None, evidence: str | None = None) -> None:
-    """Set the running text, model thinking, and internal evidence of a streaming message."""
+def stream_update(mid: str, text: str, thinking: str | None = None, evidence: str | None = None,
+                  status: str | None = None, trace_id: str | None = None,
+                  trace_path: str | None = None) -> None:
+    """Set the running text, model thinking, internal evidence, and visible progress metadata."""
     def fn(rows):
         for m in rows:
             if m.get("id") == mid:
@@ -245,6 +248,12 @@ def stream_update(mid: str, text: str, thinking: str | None = None, evidence: st
                     m["thinking"] = thinking
                 if evidence is not None:
                     m["evidence"] = evidence
+                if status is not None:
+                    m["status"] = status
+                if trace_id:
+                    m["trace_id"] = trace_id
+                if trace_path:
+                    m["trace_path"] = trace_path
                 return True
         return False
     _mutate(fn)
@@ -269,7 +278,9 @@ def finalize_orphaned_streams() -> int:
     return n["c"]
 
 
-def stream_end(mid: str, text: str | None = None, thinking: str | None = None, evidence: str | None = None) -> None:
+def stream_end(mid: str, text: str | None = None, thinking: str | None = None, evidence: str | None = None,
+               duration_ms: int | None = None, trace_id: str | None = None,
+               trace_path: str | None = None) -> None:
     """Finalize a streamed message (clears the streaming flag / cursor)."""
     def fn(rows):
         for m in rows:
@@ -280,6 +291,18 @@ def stream_end(mid: str, text: str | None = None, thinking: str | None = None, e
                     m["thinking"] = thinking
                 if evidence is not None:
                     m["evidence"] = evidence
+                ended_at = time.time()
+                m["ended_at"] = ended_at
+                if duration_ms is None:
+                    started = m.get("started_at")
+                    if isinstance(started, (int, float)):
+                        m["duration_ms"] = max(0, int((ended_at - started) * 1000))
+                else:
+                    m["duration_ms"] = max(0, int(duration_ms))
+                if trace_id:
+                    m["trace_id"] = trace_id
+                if trace_path:
+                    m["trace_path"] = trace_path
                 m["streaming"] = False
                 return True
         return False

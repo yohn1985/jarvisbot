@@ -3,7 +3,7 @@ Description=Jarvis wake loop
 After=network-online.target
 [Service]
 Type=simple
-User=jarvis
+User=yohn
 Environment=PATH=%h/.local/bin:%h/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 WorkingDirectory=/opt/jarvis
 ExecStart=/opt/jarvis/install.sh run

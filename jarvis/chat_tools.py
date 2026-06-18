@@ -13,6 +13,8 @@ import tempfile
 import json
 import html
 import difflib
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 
@@ -147,9 +149,9 @@ TOOL_SPECS = [
             "pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}}},
     {"type": "function", "function": {
         "name": "show_image",
-        "description": "Display an image file in the chat. Give the path to an existing image on the "
-                       "owner's machine (png/jpg/gif/webp); it is copied into the dashboard's served "
-                       "folder and rendered inline in your reply. Use when the owner asks to see an image.",
+        "description": "Display an image in the chat. Give a local image path or a direct http(s) image "
+                       "URL (png/jpg/gif/webp); it is copied into the dashboard's served folder and "
+                       "rendered inline in your reply. Use when the owner asks to see an image.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "absolute or repo-relative path to the image file"},
             "caption": {"type": "string", "description": "optional caption shown as alt text"}},
@@ -282,7 +284,6 @@ def run_codex(task: str, timeout: int = 300) -> dict:
                 "-c", 'approval_policy="never"',
                 "--skip-git-repo-check",
                 "--output-last-message", final_path,
-                "-",
             ],
             input=task,
             cwd=str(default_cwd()),
@@ -775,6 +776,8 @@ def show_image(path: str, caption: str = "") -> dict:
     raw = (path or "").strip()
     if not raw:
         return {"ok": False, "tool": "show_image", "error": "missing image path"}
+    if re.match(r"^https?://", raw, re.I):
+        return _show_remote_image(raw, caption)
     p = Path(raw).expanduser()
     if not p.is_absolute():
         p = default_cwd() / p
@@ -798,6 +801,40 @@ def show_image(path: str, caption: str = "") -> dict:
                 "url": url, "output": f"![{cap}]({url})"}
     except Exception as e:
         return {"ok": False, "tool": "show_image", "path": raw, "error": str(e)[:300]}
+
+
+def _show_remote_image(url: str, caption: str = "") -> dict:
+    import uuid as _uuid
+
+    parsed = urllib.parse.urlparse(url)
+    ext = Path(parsed.path).suffix.lstrip(".").lower()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Jarvis/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if not ext:
+                ext = {
+                    "image/jpeg": "jpg",
+                    "image/png": "png",
+                    "image/gif": "gif",
+                    "image/webp": "webp",
+                }.get(content_type, "")
+            if ext not in IMAGE_EXTS:
+                return {"ok": False, "tool": "show_image", "path": url,
+                        "error": f"not an image URL; supported: {', '.join(sorted(IMAGE_EXTS))}"}
+            data = resp.read(MAX_IMAGE_BYTES + 1)
+        if len(data) > MAX_IMAGE_BYTES:
+            return {"ok": False, "tool": "show_image", "path": url,
+                    "error": f"image too large (> {MAX_IMAGE_BYTES // (1024 * 1024)}MB)"}
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        name = f"{_uuid.uuid4().hex[:12]}.{ext}"
+        (UPLOADS / name).write_bytes(data)
+        cap = (caption or "").strip() or "image"
+        out_url = f"/api/upload?f={name}"
+        return {"ok": True, "tool": "show_image", "path": url, "file": name,
+                "url": out_url, "output": f"![{cap}]({out_url})"}
+    except Exception as e:
+        return {"ok": False, "tool": "show_image", "path": url, "error": str(e)[:300]}
 
 
 def search(pattern: str, root: str | None = None) -> dict:

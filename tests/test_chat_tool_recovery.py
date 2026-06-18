@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest import mock
 
 from jarvis import chat_tools, harness, local_knowledge
 
@@ -13,6 +14,20 @@ class FakeLLM:
     def run(self, role, prompt, timeout=120):
         self.prompt = prompt
         return "Recovered answer from executed evidence."
+
+
+class RoleFallbackLLM:
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    def run(self, role, prompt, timeout=120):
+        self.calls.append(role)
+        self.prompt = prompt
+        value = self.responses.get(role, "")
+        if isinstance(value, Exception):
+            raise value
+        return value
 
 
 class ChatToolRecoveryTests(unittest.TestCase):
@@ -131,6 +146,85 @@ class ChatToolRecoveryTests(unittest.TestCase):
         self.assertEqual(profile["mode"], "heavy")
         self.assertIn("live", " ".join(profile["required_checks"]))
 
+    def test_execution_profile_heavy_for_ticket_count_question(self):
+        profile = harness.select_execution_profile("why did the open ticket go from 176 to 192?", "")
+
+        self.assertEqual(profile["mode"], "heavy")
+        self.assertIn("live", " ".join(profile["required_checks"]))
+
+    def test_ticket_questions_start_with_gitea_evidence(self):
+        calls = harness.planned_tool_calls("why did the open ticket go from 176 to 192?")
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(call["tool"] == "shell" for call in calls))
+        self.assertTrue(all(chat_tools.shell_safety_error(call["args"]["cmd"]) is None for call in calls))
+        self.assertIn("jarvis.gitea_tools open-summary", calls[0]["args"]["cmd"])
+        self.assertTrue(harness.planned_calls_are_sufficient("why did the open ticket go from 176 to 192?", calls))
+
+    def test_explicit_ticket_number_searches_all_gitea_repos(self):
+        calls = harness.planned_tool_calls("ticket number 34 pull it up")
+
+        self.assertEqual(len(calls), 1)
+        cmd = calls[0]["args"]["cmd"]
+        self.assertIn("jarvis.gitea_tools issue 34", cmd)
+        self.assertIsNone(chat_tools.shell_safety_error(cmd))
+        self.assertTrue(harness.planned_calls_are_sufficient("ticket number 34 pull it up", calls))
+
+    def test_screenshot_url_is_planned_as_show_image(self):
+        calls = harness.planned_tool_calls(
+            "https://screenshot.example.com/screenshots/2026/06/17/example.png"
+        )
+
+        self.assertEqual(calls[0]["tool"], "show_image")
+        self.assertIn("https://screenshot.example.com/", calls[0]["args"]["path"])
+        self.assertTrue(harness.planned_calls_are_sufficient("show this screenshot https://example.test/a.png", calls))
+
+    def test_ticket_planned_evidence_skips_extra_tool_decision(self):
+        class NoDecisionLLM:
+            def run(self, role, prompt, timeout=120):
+                raise AssertionError("ticket evidence should not ask the model for another tool")
+
+        with mock.patch.object(
+            chat_tools,
+            "run_model_tool",
+            return_value={"ok": True, "tool": "shell", "command": "gitea", "output": "total_open_issues=175"},
+        ):
+            evidence = harness.collect_tool_evidence(
+                NoDecisionLLM(),
+                "base",
+                "how many tickets are open in gitea?",
+                force=True,
+            )
+
+        self.assertIn("total_open_issues=175", evidence)
+
+    def test_show_image_accepts_remote_image_url(self):
+        class FakeResponse:
+            headers = {"Content-Type": "image/png"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _size):
+                return b"\x89PNG\r\n\x1a\n"
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(chat_tools, "UPLOADS", Path(td)):
+            with mock.patch("jarvis.chat_tools.urllib.request.urlopen", return_value=FakeResponse()):
+                result = chat_tools.show_image("https://example.test/image.png")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool"], "show_image")
+        self.assertTrue(result["file"].endswith(".png"))
+
+    def test_execution_profile_heavy_for_owner_correction(self):
+        profile = harness.select_execution_profile("your answer doesnt look correct or complete", "")
+
+        self.assertEqual(profile["mode"], "heavy")
+        self.assertIn("owner correction requires rechecking", profile["reason"])
+
     def test_execution_profile_heavy_for_memory_must_verify(self):
         docs = "Learned memories relevant to this question:\n\nMEMORY: service X is running\nTRUST_POLICY: must_verify_before_answer\nVOLATILITY: volatile\nSTALE: no"
 
@@ -146,6 +240,21 @@ class ChatToolRecoveryTests(unittest.TestCase):
 
         self.assertIn("Memory hint:", answer)
         self.assertIn("verify", answer)
+
+    def test_force_final_answer_uses_fallback_role(self):
+        llm = RoleFallbackLLM({"orchestrator": "", "summarizer": "Final answer from evidence."})
+
+        answer = harness.force_final_answer(llm, "why did tickets jump?", "ticket evidence")
+
+        self.assertEqual(answer, "Final answer from evidence.")
+        self.assertEqual(llm.calls[:2], ["orchestrator", "summarizer"])
+        self.assertIn("ticket evidence", llm.prompt)
+
+    def test_detects_raw_tool_output_for_answer_question(self):
+        raw = "$ cd /repo/audit && TOKEN=...\npage 1: 50\npage 2: 50"
+
+        self.assertTrue(harness.looks_like_raw_tool_output(raw, "why did the ticket count jump?"))
+        self.assertFalse(harness.looks_like_raw_tool_output(raw, "show me the raw output"))
 
     def test_verification_evidence_pack_keeps_relevant_tail_command(self):
         evidence = (

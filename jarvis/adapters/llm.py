@@ -45,6 +45,22 @@ DEFAULT_BACKENDS = {
     "ollama": ["ollama", "run", "{model}", "{prompt}"],
 }
 
+
+def codex_exec_cmd(model: str, workspace: str) -> list[str]:
+    """Canonical noninteractive Codex command.
+
+    Local config may choose the model, but it should not be able to drop the
+    working directory, sandbox, approval policy, or git-repo guard flags that
+    make dashboard-routed Codex reliable.
+    """
+    return [
+        "codex", "exec", "--model", model,
+        "--cd", workspace,
+        "--sandbox", "danger-full-access",
+        "-c", 'approval_policy="never"',
+        "--skip-git-repo-check",
+    ]
+
 # A backend may also be an HTTP (OpenAI-compatible) endpoint instead of a CLI list, e.g.:
 #   ollama_cloud: {http: "https://ollama.com/v1/chat/completions", api_key_env: OLLAMA_API_KEY}
 # This covers Ollama Cloud and any OpenAI-compatible API (subscription key, no local CLI needed).
@@ -164,6 +180,19 @@ def reasoning_value(kind: str, params: dict, model_caps=None) -> str:
     return val if (val and val != "default" and val in caps["options"]) else ""
 
 
+def reasoning_delta_text(delta: dict) -> str:
+    """Extract real streamed model reasoning from common OpenAI-compatible fields.
+
+    Keep this limited to provider-emitted reasoning fields. Harness/tool progress is stored separately
+    as evidence and must not be presented as the model's Thought.
+    """
+    for key in ("reasoning_content", "reasoning", "thinking", "thinking_content"):
+        value = (delta or {}).get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _img_media_type(path):
     import os
     ext = os.path.splitext(path)[1].lower().lstrip(".")
@@ -207,7 +236,10 @@ class RoutingLLM:
         kind = backend_kind(backend, spec)
         if kind == "claude_cli":                                    # 1M context -> the model[1m] variant
             model = claude_model_variant(model, params)
-        cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
+        if kind == "codex_cli":
+            cmd = codex_exec_cmd(model, workspace)
+        else:
+            cmd = [a.replace("{model}", model).replace("{workspace}", workspace) for a in spec]
         level = reasoning_value(kind, params)
         if kind == "claude_cli" and level:                          # claude CLI: native --effort flag
             cmd += ["--effort", level]
@@ -318,6 +350,11 @@ class RoutingLLM:
                 tried.append(f"{backend}:absent"); continue
             spec = self.backends.get(backend)
             try:
+                # Reasoning-capture contract (keep agnostic — see tests/test_thought_contract.py):
+                #   - claude CLI      -> _stream_claude_cli emits thinking_delta as on_delta("thinking").
+                #   - openai/ollama   -> _stream_http_openai emits reasoning fields via reasoning_delta_text.
+                #   - one-shot path   -> codex CLI and the anthropic-HTTP one-shot emit no reasoning stream;
+                #                        that's an honest empty Thought, NEVER faked from harness evidence.
                 if backend == "claude" and not (isinstance(spec, dict) and spec.get("http")):
                     return self._stream_claude_cli(model, prompt, emit, timeout, params, should_cancel,
                                                    images, enable_mcp=bool(tools))
@@ -519,8 +556,8 @@ class RoutingLLM:
                 except Exception:
                     continue
                 delta = (j.get("choices") or [{}])[0].get("delta") or {}
-                # some reasoning models stream a separate reasoning field
-                rc = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                # Some reasoning models stream a separate reasoning field.
+                rc = reasoning_delta_text(delta)
                 if rc:
                     on_delta("thinking", rc)
                 d = delta.get("content") or ""

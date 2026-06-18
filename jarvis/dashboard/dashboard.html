@@ -155,6 +155,9 @@
   .thbody pre{ margin:0; color:var(--dim); font-style:italic; font-size:12px; white-space:pre-wrap; }
   .thinking-live{ display:inline-flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; }
   .activityline{ display:inline-flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; margin:0 0 7px; }
+  .runmeta{ display:flex; align-items:center; gap:8px; color:var(--dim); font-size:11px; margin-top:8px; }
+  .tracebtn{ background:none; border:none; color:var(--grntxt); cursor:pointer; font:inherit; font-size:11px; padding:0; }
+  .tracebtn:hover{ text-decoration:underline; }
   .worklog{ display:flex; flex-direction:column; gap:3px; margin:0 0 9px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.025); color:var(--dim); font-size:12px; max-width:760px; }
   .workstep{ display:flex; align-items:flex-start; gap:8px; }
   .workstep .thdot{ margin-top:5px; flex:0 0 auto; }
@@ -1148,6 +1151,26 @@ async function load(){
 }
 // --- chat rendering, decoupled so streaming can update WITHOUT the heavy full-dashboard refresh ---
 let _chatIds='', _chatConv=null, _focusLatestTurn=false, _preserveChatView=false, _holdContextView=false;
+function fmtRunMs(ms){
+  ms=Number(ms||0); if(!ms) return '';
+  const s=ms/1000;
+  if(s<10) return s.toFixed(1)+'s';
+  if(s<60) return Math.round(s)+'s';
+  const m=Math.floor(s/60), r=Math.round(s%60);
+  return r?`${m}m ${r}s`:`${m}m`;
+}
+function traceMeta(m){
+  if(!m.duration_ms && !m.trace_path && !m.started_at) return '';
+  let label='Worked', dur=fmtRunMs(m.duration_ms);
+  if(m.streaming){
+    label='Working';
+    if(m.started_at) dur=fmtRunMs(Date.now()-(Number(m.started_at)*1000));
+  }
+  if(!dur&&!m.trace_path) return '';
+  const trace=m.trace_path?`<button type="button" class="tracebtn" onclick="openTrace('${esc(m.id)}')">trace</button>`:'';
+  return `<div class="runmeta"><span>${label}${dur?' '+esc(dur):''}</span>${trace}</div>`;
+}
+function openTrace(id){ window.open('/api/chat-trace?id='+encodeURIComponent(id),'_blank'); }
 function renderBody(m){
   const isJ=m.from==='jarvis', isQ=m.kind==='question';
   let body;
@@ -1156,12 +1179,19 @@ function renderBody(m){
     const thinking=hasField?m.thinking:sp.think; const bodyText=hasField?m.text:sp.body;
     const evidence=m.evidence||thinking;
     const edits=!m.streaming?editCardsFromThinking(evidence):'';
+    // Thought is for real model reasoning only (`m.thinking` or explicit <think> blocks).
+    // Do not fall back to harness evidence here: tool/worklog lines belong in the streaming
+    // progress area, not in the completed Thought block.
     const shownThought=visibleThinking(thinking);
-    const activity=(m.streaming&&!shownThought)?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Working...')}</span></div>`:'';
+    // Keep the progress/worklog box streaming-only. After completion, the answer should show the
+    // collapsible Thought block but not repeat transient progress steps below every message.
+    const activity=m.streaming
+      ? (worklogFromThinking(evidence)||(!shownThought?`<div class="activityline"><span class="thdot pulse"></span><span>${esc(m.status||'Working...')}</span></div>`:''))
+      : '';
     const visible=(bodyText||'').trim();
     const jimgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
     body=activity+edits+(shownThought?thoughtBlock(shownThought,m.id,!!m.streaming):'')+(visible?'<div class="mdbody">'+md(visible)+'</div>':'')+jimgs+
-         (m.streaming?'<span class="cursor">▌</span>':'');
+         (m.streaming?'<span class="cursor">▌</span>'+traceMeta(m):traceMeta(m));
   } else {
     const imgs=(m.images||[]).map(im=>`<img class="msgimg" src="/api/upload?f=${encodeURIComponent(im.file)}"/>`).join('');
     body=imgs+esc(m.text);
